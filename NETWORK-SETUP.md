@@ -3,8 +3,6 @@
 > 2026-10-04 起改用**无 mihomo、无 TUN**的方案:`iptables REDIRECT + redsocks + dnsfwd` 透明代理，出口仍是固定新加坡原生住宅 IP。
 > 历史:mihomo 版(含 TUN)已弃用，原因见 §11——**任何开机守护进程/路由抢占都会导致 `wsl` 冷启动无回显**。mihomo 配置仍留在 `~/.config/mihomo/` 备查。
 
-> **公开脱敏版** —— 原始内网文档在本机 `~/NETWORK-SETUP.md`;本版已将住宅 IP/账号/密码/内网地址替换为占位符。
-
 ---
 
 ## 1. 一句话 / 架构
@@ -43,6 +41,9 @@ WSL 全部 TCP + DNS → **iptables nat REDIRECT(不动路由表)** → redsocks
 | `/etc/redsocks.conf` | redsocks 配置(600,含住宅账号) |
 | `/etc/sudoers.d/wslproxy` | 免密执行上面两个脚本 |
 | `~/.bashrc` | 登录时调 proxy-up;`WSL_PROXY=off` 时调 proxy-down |
+| `/etc/gost.env` | gost 住宅账号(600,root) |
+| `/etc/systemd/system/gost-winproxy.service` | Windows 长期端口单元(开机自启) |
+| `/usr/local/bin/gost` | gost 二进制 |
 | `~/network-backup/` | 上述文件快照 + 旧 mihomo config |
 | `~/.config/mihomo/` | 旧 mihomo 方案残留(服务已 disabled,不再使用) |
 
@@ -82,10 +83,27 @@ curl -s https://ipinfo.io/json | head -c 120
 getent hosts github.com        # 真实 IP,不再是 198.18.x 假 IP
 ```
 
-## 6. 给 Windows / 其他机器用
+## 6. 给 Windows 用的长期端口(gost,开机自启)
 
-- 本方案只监听 `127.0.0.1`,不对外;Windows 要用就让 Clash 自己选节点,或另开一台跑 redsocks。
-- 若必须让 Windows 走住宅:在 WSL 里起一个 socks/http 出口(比如 `redsocks` 前端再套 `gost -L socks5://:7893 -F ...`)并临时放行防火墙——暂不需要,略。
+WSL 内跑 `gost`(systemd 单元 `gost-winproxy.service`,**普通用户 cznorth 身份**,凭据在 `/etc/gost.env` 600):
+
+| 协议 | 地址 |
+|---|---|
+| HTTP | `http://<WSL_IP>:7893` |
+| SOCKS5 | `socks5://<WSL_IP>:7894` |
+| 出口 | 新加坡住宅 `<RES_IP>` |
+
+```powershell
+# PowerShell / Claude Code(Windows 版)
+$env:HTTPS_PROXY="http://172.21.x.x:7893"; $env:HTTP_PROXY=$env:HTTPS_PROXY
+claude
+# SOCKS5 场景(如某些只认 socks 的客户端):172.21.x.x:7894
+```
+
+- WSL IP 会变:`wsl hostname -I` 重取(取 IPv4)。
+- 首次连接 Windows 防火墙可能弹窗,允许专用网络。
+- 单元文件 `/etc/systemd/system/gost-winproxy.service`;回滚:`sudo systemctl disable --now gost-winproxy`。
+- **为什么它不会重演 mihomo 的冷启动问题**:纯用户态转发进程,不开 TUN、不抢路由、不劫持 DNS、不用 root、`After=network.target`(不等网络就绪),systemd 侧只是一个普通 `Type=simple` 服务。
 
 ## 7. 覆盖能力(和旧 TUN 方案对比)
 
