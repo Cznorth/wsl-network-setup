@@ -112,6 +112,21 @@ getent hosts github.com        # 真实 IP,不再是 198.18.x 假 IP
 python3 ~/network-fix/dnstest.py 1053   # DNS 延迟:命中 <1ms,未命中 ~0.4–1.8s
 ```
 
+全链路延迟(逐跳拆分,定位慢在哪一段):
+```bash
+bash tools/net_check.sh -L      # LAT_ROUNDS=5 LAT_URL=https://api.anthropic.com 可改轮数/目标
+```
+| 输出项 | 含义 | 正常量级(SG 节点) |
+|---|---|---|
+| ① WSL ↔ Clash 往返 | 本机 → Windows,应 ≈0 | <5 ms |
+| ② Clash→节点→住宅 建链 | Clash 连节点 + 节点连住宅的额外开销 | <800 ms |
+| ③ WSL ↔ 住宅 往返 | 经节点到住宅的纯 RTT(住宅认证一来一回);**节点选得远这里就大** | <250 ms |
+| ④ 住宅 → 目标 | 住宅解析目标域名 + 建 TCP | <150 ms |
+| 仅 Clash 节点 / 全链路 / 程序实际体验 | 同一 HTTPS 请求分别经 Clash、经 gost、经透明代理的总耗时;后两者减前者 = 住宅这跳的代价 | <1.5 s |
+| DNS 命中 / 未命中 | dnsfwd 缓存命中 vs 经住宅查 8.8.8.8 | ~0 / <1.5 s |
+
+原理:手工逐步走 SOCKS5(连 Clash → CONNECT 住宅 → 住宅 greeting → 认证 → CONNECT 目标),每步单独计时;Clash 会先回 CONNECT 成功再异步建链,所以用"住宅认证往返"作纯 RTT,建链开销 = (Clash CONNECT + 住宅 greeting) − RTT。跳点参数从 gost 链式进程命令行解析,无需 root;③ 偏高时会提示节点所在国家并建议切 SG/HK 节点。
+
 ⚠️ **别用 ping 判断代理通不通**:ICMP 不经 iptables REDIRECT,SOCKS5 也无法承载 ICMP,ping 一律裸连(→ Windows)。所以 `ping google.com` 不通是正常的,`ping 8.8.8.8` 通也不代表走了住宅。测连通用 `curl`。
 
 ## 6. 给 Windows 用的长期端口(gost,开机自启)
@@ -248,7 +263,7 @@ WSL → iptables REDIRECT → dnsfwd(1053)  ┘    Hop2: 住宅 socks5(<RES_IP>:
 | `files/dnsfwd.py` | `/usr/local/bin/` | DNS 转发器 v2;默认上游 = 本地 gost 链式,不含凭据 |
 | `files/redsocks.conf` | `/etc/` | 无 `#` 注释(见 §12) |
 | `files/gost-winproxy.service` | `/etc/systemd/system/` | `__USER__` 安装时替换为当前用户 |
-| `tools/net_check.sh` | — | 检测:`bash tools/net_check.sh [-q 快速] [-j JSON]` |
+| `tools/net_check.sh` | — | 检测:`bash tools/net_check.sh [-q 快速] [-j JSON] [-L 只测延迟]`;含全链路逐跳延迟(见 §5) |
 | `tools/dnstest.py` | — | DNS 测速:`python3 tools/dnstest.py 1053` |
 
 `.bashrc` 块用 `# >>> wsl-network-setup >>>` / `# <<< wsl-network-setup <<<` 标记,重装时整块替换;旧版手写的 `# ===== 出口逻辑 … 出口 end =====` 块也会被一并替换。

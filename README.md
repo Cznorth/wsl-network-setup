@@ -13,7 +13,8 @@ WSL2 里让**所有出口**(含 DNS、非交互 shell、不读环境变量的程
 git clone https://github.com/Cznorth/wsl-network-setup.git && cd wsl-network-setup
 cp wslproxy.env.example wslproxy.env && vi wslproxy.env   # 填住宅地址/端口/账号/密码
 sudo ./install.sh                                         # --no-winproxy 跳过 Windows 端口
-bash tools/net_check.sh                                   # 检测出口 / DNS 泄露 / 纯净度
+bash tools/net_check.sh                                   # 检测出口 / DNS 泄露 / 纯净度 / 全链路延迟
+bash tools/net_check.sh -L                                # 只测延迟:逐跳拆分,找出慢在哪一段
 ```
 
 前提:Windows Clash 已运行并开启 **Allow LAN**(默认 7890)。卸载:`sudo ./uninstall.sh`。
@@ -22,7 +23,7 @@ bash tools/net_check.sh                                   # 检测出口 / DNS �
 |---|---|
 | `install.sh` / `uninstall.sh` | 一键安装(幂等,先备份)/ 卸载 |
 | `files/` | 装到系统里的脚本和配置(`proxy-up.sh`、`proxy-down.sh`、`dnsfwd.py`、`redsocks.conf`、`gost-winproxy.service`) |
-| `tools/` | `net_check.sh`(检测)、`dnstest.py`(DNS 测速) |
+| `tools/` | `net_check.sh`(出口/泄露/纯净度/逐跳延迟检测)、`dnstest.py`(DNS 测速) |
 
 > 本仓库为**脱敏版**:住宅 IP/账号/密码/内网地址已替换为占位符(`<RES_IP>` / `<user>` / `<pass>`)。凭据只存在本机 `/etc/gost.env`(600)和你自己的 `wslproxy.env`(已 gitignore)。
 
