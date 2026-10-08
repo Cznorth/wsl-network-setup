@@ -1,0 +1,14 @@
+[Unit]
+Description=gost - Windows 用长期代理端口(经 Clash 链式 → 住宅 SOCKS5)
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+EnvironmentFile=/etc/gost.env
+ExecStart=/usr/local/bin/gost -L=http://:7893 -L=socks5://:7894 -F=socks5://${CLASH_GW}:${CLASH_PORT} -F=socks5://${RES_USER}:${RES_PASS}@${RES_HOST}:${RES_PORT}
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
