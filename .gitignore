@@ -1,3 +1,5 @@
 wslproxy.env
+.env
+docker-proxies/
 __pycache__/
 *.pyc

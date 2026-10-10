@@ -1,0 +1,58 @@
+services:
+  residential-proxy:
+    build:
+      context: .
+      args:
+        GOST_VERSION: "2.12.0"
+        UBUNTU_IMAGE: "${UBUNTU_IMAGE:-docker.m.daocloud.io/library/ubuntu:24.04}"
+        APT_MIRROR: "${APT_MIRROR:-mirrors.aliyun.com}"
+        GOST_DOWNLOAD_BASE: "${GOST_DOWNLOAD_BASE:-https://ghfast.top/https://github.com/ginuerzh/gost/releases/download}"
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    working_dir: /mnt/c/Users/cznorth
+    # Explicitly clear inherited Docker/host proxy variables. Transparent
+    # iptables routing must handle traffic instead of an explicit host proxy.
+    environment:
+      # These values come from the Compose .env file or --env-file. Keeping
+      # them here lets every multi-instance project use its own credentials.
+      RES_HOST: "${RES_HOST:?RES_HOST is required}"
+      RES_PORT: "${RES_PORT:-443}"
+      RES_USER: "${RES_USER:?RES_USER is required}"
+      RES_PASS: "${RES_PASS:?RES_PASS is required}"
+      USE_CLASH: "${USE_CLASH:-1}"
+      CLASH_HOST: "${CLASH_HOST:-host.docker.internal}"
+      CLASH_PORT: "${CLASH_PORT:-7890}"
+      DNS_UPSTREAM: "${DNS_UPSTREAM:-8.8.8.8:53}"
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      all_proxy: ""
+    dns:
+      - 127.0.0.1
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      # Bind to localhost by default. Set PROXY_BIND_ADDRESS=0.0.0.0 in .env
+      # only when other machines need to use this proxy.
+      - "${PROXY_BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-7893}:7893"
+      - "${PROXY_BIND_ADDRESS:-127.0.0.1}:${SOCKS_PORT:-7894}:7894"
+    volumes:
+      # Full Windows drives, matching WSL's /mnt/c and /mnt/d paths.
+      - type: bind
+        source: "C:/"
+        target: /mnt/c
+      - type: bind
+        source: "D:/"
+        target: /mnt/d
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS https://api.ipify.org >/dev/null"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 10s
