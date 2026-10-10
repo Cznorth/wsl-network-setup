@@ -209,6 +209,7 @@ claude
 - `pkill -f <关键词>` 会误杀**命令行里含该关键词的进程**(排查时把自己 shell 杀了两次,`exit 143`)。脚本内只用 pidfile + `pkill -x <精确comm>`,或锚定完整路径模式。
 - iptables `-C/-D` 条件里 `--comment` 必须写成 `-m comment --comment dns`,漏了 `-m comment` 会导致判重/删除永远失败。
 - 重装 redsocks 时 apt 会自动 `enable` 它的 systemd 服务——已 `systemctl disable --now redsocks`;本方案**开机不跑任何守护进程**。
+- **重装时 apt 装 redsocks 直接失败(2026-10-11,arvin 机复现)**:上一版 `proxy-up` 拉起的 redsocks 占着 12345,apt 的 postinst 自动 `invoke-rc.d start` → 新实例 `bind: Address already in use` → 单元 failed → `dpkg: error processing package redsocks (--configure)` → install.sh 在第 2 步就中断。只发生在**重装**(首次装还没人占端口);且失败时 `ExecStartPre -t` 是 SUCCESS,别怀疑配置文件。修法(install.sh 第 2 步):① 装依赖前先 `proxy-down.sh` + `pkill -x redsocks` 腾端口;② 装包期间放 `/usr/sbin/policy-rc.d`(exit 101)让 `invoke-rc.d` 不起服务(实测被拒并返回 0,dpkg 不报错),退出时删掉。手工恢复:`sudo /usr/local/bin/proxy-down.sh && sudo dpkg --configure -a && sudo ./install.sh`。
 - **`/etc/redsocks.conf` 不能写 `#` 注释**(2026-10-05 定位):redsocks 配置解析器不认注释,报 `file parsing error ... unclosed section`,redsocks 直接不起进程;proxy-up 里 `pgrep -x redsocks || redsocks -c ...` 不会报错——现象 = 「规则装了但 12345 没人监听」全站超时。
 - 旧版 up 脚本在 dnsfwd 没起来时仍装 DNS REDIRECT → DNS 全断(与注释"保持原状"相反);v2 改为只在 dnsfwd 存活时装,否则拆除。
 - 旧版 up 的 `pgrep -x dnsfwd.py` 分支永远不命中;旧版 down 的 `pkill -f 'dnsfwd\.py'` 会误杀命令行含该词的 shell。现统一用锚定模式 `^python3 /usr/local/bin/dnsfwd\.py`。

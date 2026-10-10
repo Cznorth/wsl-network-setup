@@ -10,6 +10,8 @@
 #
 # 配置优先级:环境变量 > 配置文件 > 已有 /etc/gost.env > 交互输入
 # 重复运行安全(幂等);改动前的文件备份到 ~/network-backup/install-<时间>/
+# 重装会先拆掉上一版的透明代理再装依赖——否则 apt 装 redsocks 时,postinst 自动 start 的
+# redsocks.service 会因 12345 被占(bind: Address already in use)而失败,dpkg 报错中断安装。
 # 装完的检测:bash tools/net_check.sh
 # =============================================================================
 set -u
@@ -22,7 +24,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         -c|--config) CONF="$2"; shift ;;
         --no-winproxy) WINPROXY=0 ;;
-        -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
         *) echo "未知参数: $1(-h 查看帮助)"; exit 1 ;;
     esac
     shift
@@ -99,15 +101,40 @@ fi
 
 # ---------------------------------------------------------------- 2. 依赖 ----
 step "2. 安装依赖"
+# 装包期间禁止 invoke-rc.d 自动起服务(redsocks 的 postinst 会 start redsocks.service,
+# 而 12345 可能被上一版 proxy-up 拉起的 redsocks 占着 → bind 失败 → dpkg 报错 → 安装中断)。
+# policy-rc.d 返回 101 时 invoke-rc.d 只拒绝并返回 0,dpkg 不会报错;
+# 本方案的 redsocks 本来就由 proxy-up 按需拉起,不需要包自带的开机服务。
+POL=/usr/sbin/policy-rc.d
+if [ ! -e "$POL" ]; then
+    printf '#!/bin/sh\nexit 101\n' >"$POL" && chmod 755 "$POL"
+    trap 'rm -f "$POL"' EXIT   # 无论成功失败都清掉,免得影响以后装别的包
+fi
+
+# 重装场景:先拆掉上一版的透明代理,把 12345 等端口腾出来
+if [ -x /usr/local/bin/proxy-down.sh ]; then
+    /usr/local/bin/proxy-down.sh >/dev/null 2>&1 && ok "已拆掉上一版的透明代理(规则+进程)"
+fi
+pkill -x redsocks 2>/dev/null && sleep 0.3
+# 上一次装到一半挂掉的包(redsocks 常见)先收尾
+if dpkg-query -W -f='${db:Status-Abbrev}' redsocks 2>/dev/null | grep -q '^i[^i]'; then
+    dpkg --configure -a >/dev/null 2>&1 && ok "已收尾上次未配置完的包(dpkg --configure -a)" \
+        || warn "dpkg --configure -a 仍失败,看上面 apt 的输出"
+fi
+
 need=()
 command -v redsocks >/dev/null || need+=(redsocks)
 [ -x /usr/sbin/iptables ]     || need+=(iptables)
 command -v python3 >/dev/null || need+=(python3)
 command -v curl >/dev/null    || need+=(curl)
 if [ ${#need[@]} -gt 0 ]; then
-    DEBIAN_FRONTEND=noninteractive apt-get update -qq && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${need[@]}" || die "apt 安装失败:${need[*]}"
-    ok "已安装:${need[*]}"
+    if DEBIAN_FRONTEND=noninteractive apt-get update -qq &&
+       DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${need[@]}"; then
+        ok "已安装:${need[*]}"
+    else
+        rm -f "$POL" 2>/dev/null
+        die "apt 安装失败:${need[*]}(先 sudo /usr/local/bin/proxy-down.sh 释放 12345,再重跑)"
+    fi
 else
     ok "redsocks / iptables / python3 / curl 已就绪"
 fi
