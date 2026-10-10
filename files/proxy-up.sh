@@ -15,7 +15,9 @@
 # 最坏降级为裸连,绝不出现"劫持了 DNS 但上游死"的全断。
 #
 # 配置全部在 /etc/gost.env(600,root):RES_HOST RES_PORT RES_USER RES_PASS
-#   [CLASH_PORT=7890] [DNS_UPSTREAM=8.8.8.8:53];CLASH_GW 由本脚本每次刷新。
+#   [CLASH_PORT=7890] [DNS_UPSTREAM=8.8.8.8:53]
+#   [WIN_HTTP_PORT=7893] [WIN_SOCKS_PORT=7894](WSL 暴露给 Windows 的长期端口)
+#   CLASH_GW 由本脚本每次刷新。
 set -u
 IPT=/usr/sbin/iptables
 GOST=/usr/local/bin/gost
@@ -165,13 +167,31 @@ else
 fi
 
 # ---------- 6) Windows 侧长期端口(gost-winproxy):同样经 Clash ----------
+# 端口改了也要重启:unit 从 /etc/gost.env 读 WIN_HTTP_PORT/WIN_SOCKS_PORT
+# (service 里的 Environment= 只是兜底默认值,EnvironmentFile 优先)
 cur=$(envget CLASH_GW)
-if [ "$cur" != "$CLASH_GW" ]; then
-    sed -i '/^CLASH_GW=/d' "$GOSTENV"
-    echo "CLASH_GW=$CLASH_GW" >> "$GOSTENV"
+wp_http=$(envget WIN_HTTP_PORT);   wp_http=${wp_http:-7893}
+wp_socks=$(envget WIN_SOCKS_PORT); wp_socks=${wp_socks:-7894}
+# 旧版单元把 7893/7894 写死在 ExecStart 里,改 /etc/gost.env 的端口不会生效
+if [ -f /etc/systemd/system/gost-winproxy.service ] &&
+   ! grep -q 'WIN_HTTP_PORT' /etc/systemd/system/gost-winproxy.service 2>/dev/null; then
+    log "gost-winproxy 单元是旧版(端口写死),WIN_HTTP_PORT/WIN_SOCKS_PORT 不生效;重跑一次 sudo ./install.sh 更新"
+fi
+# 只在同一次开机内比较端口变化(/run 重启即清;新开机时服务已按当前配置启动过)
+bid=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)
+prev=$(cat /run/wslproxy-winports 2>/dev/null)
+wp_changed=0
+[ -n "$bid" ] && [ "${prev%% *}" = "$bid" ] && [ "$prev" != "$bid $wp_http $wp_socks" ] && wp_changed=1
+if [ "$cur" != "$CLASH_GW" ] || [ "$wp_changed" = 1 ]; then
+    if [ "$cur" != "$CLASH_GW" ]; then
+        sed -i '/^CLASH_GW=/d' "$GOSTENV"
+        echo "CLASH_GW=$CLASH_GW" >> "$GOSTENV"
+    fi
     if systemctl is-enabled gost-winproxy >/dev/null 2>&1; then
         systemctl restart gost-winproxy >/dev/null 2>&1
-        log "gost-winproxy 重启,CLASH_GW=$CLASH_GW"
+        log "gost-winproxy 重启,CLASH_GW=$CLASH_GW WIN_HTTP_PORT=$wp_http WIN_SOCKS_PORT=$wp_socks"
     fi
 fi
+# 记账:本次开机里“服务已在跑的端口”,供下次登录判断端口有没有被改过
+[ -n "$bid" ] && echo "$bid $wp_http $wp_socks" > /run/wslproxy-winports 2>/dev/null
 exit 0

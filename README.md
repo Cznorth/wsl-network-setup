@@ -4,14 +4,14 @@ WSL2 里让**所有出口**(含 DNS、非交互 shell、不读环境变量的程
 
 - `iptables nat REDIRECT`(不动路由表,开机零守护进程,冷启动零风险)
 - `redsocks`(TCP)+ `dnsfwd.py`(DNS,真实 IP 解析,无泄露)→ 本地 `gost` 链式(→ Clash → 住宅)
-- `gost-winproxy`(systemd,给 Windows 提供 `7893` HTTP / `7894` SOCKS5 长期端口)
+- `gost-winproxy`(systemd,给 Windows 提供 HTTP / SOCKS5 长期端口,端口可配:`WIN_HTTP_PORT` 默认 7893、`WIN_SOCKS_PORT` 默认 7894)
 - 链路任一跳不通自动降级为裸连,不会出现"劫持了 DNS 但上游死"的全断
 
 ## 安装
 
 ```bash
 git clone https://github.com/Cznorth/wsl-network-setup.git && cd wsl-network-setup
-cp wslproxy.env.example wslproxy.env && vi wslproxy.env   # 填住宅地址/端口/账号/密码
+cp wslproxy.env.example wslproxy.env && vi wslproxy.env   # 填住宅地址/端口/账号/密码(Windows 端口 WIN_HTTP_PORT/WIN_SOCKS_PORT 可选)
 sudo ./install.sh                                         # --no-winproxy 跳过 Windows 端口
 bash tools/net_check.sh                                   # 检测出口 / DNS 泄露 / 纯净度 / 全链路延迟
 bash tools/net_check.sh -L                                # 只测延迟:逐跳拆分,找出慢在哪一段

@@ -6,7 +6,7 @@
 #   cp wslproxy.env.example wslproxy.env && vi wslproxy.env   # 填住宅参数
 #   sudo ./install.sh                  # 读 ./wslproxy.env;缺的项交互询问
 #   sudo ./install.sh -c /path/x.env   # 指定配置文件
-#   sudo ./install.sh --no-winproxy    # 不装给 Windows 用的 7893/7894 长期端口
+#   sudo ./install.sh --no-winproxy    # 不装给 Windows 暴露的 HTTP/SOCKS5 长期端口(WIN_HTTP_PORT/WIN_SOCKS_PORT)
 #
 # 配置优先级:环境变量 > 配置文件 > 已有 /etc/gost.env > 交互输入
 # 重复运行安全(幂等);改动前的文件备份到 ~/network-backup/install-<时间>/
@@ -42,7 +42,7 @@ grep -qi microsoft /proc/version 2>/dev/null || warn "看起来不是 WSL,继续
 
 # ---------------------------------------------------------------- 1. 配置 ----
 step "1. 读取配置"
-KEYS=(RES_HOST RES_PORT RES_USER RES_PASS CLASH_PORT DNS_UPSTREAM)
+KEYS=(RES_HOST RES_PORT RES_USER RES_PASS CLASH_PORT DNS_UPSTREAM WIN_HTTP_PORT WIN_SOCKS_PORT)
 declare -A VAL=()
 fileget(){ grep -s "^$2=" "$1" | tail -n1 | cut -d= -f2- | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"; }
 for k in "${KEYS[@]}"; do
@@ -54,6 +54,9 @@ done
 [ -f "$CONF" ] && ok "配置文件:$CONF" || warn "没有配置文件 $CONF,缺的项将交互询问"
 VAL[CLASH_PORT]=${VAL[CLASH_PORT]:-7890}
 VAL[DNS_UPSTREAM]=${VAL[DNS_UPSTREAM]:-8.8.8.8:53}
+# WSL 暴露给 Windows 的长期端口(0.0.0.0 监听,Windows 经 <WSL_IP>:端口 访问)
+VAL[WIN_HTTP_PORT]=${VAL[WIN_HTTP_PORT]:-7893}
+VAL[WIN_SOCKS_PORT]=${VAL[WIN_SOCKS_PORT]:-7894}
 
 ask(){ # ask KEY 提示 [secret]
     [ -n "${VAL[$1]}" ] && return
@@ -69,6 +72,12 @@ ask RES_PASS "住宅 SOCKS5 密码" secret
 
 [[ "${VAL[RES_PORT]}" =~ ^[0-9]+$ ]]   || die "RES_PORT 不是数字:${VAL[RES_PORT]}"
 [[ "${VAL[CLASH_PORT]}" =~ ^[0-9]+$ ]] || die "CLASH_PORT 不是数字:${VAL[CLASH_PORT]}"
+for k in WIN_HTTP_PORT WIN_SOCKS_PORT; do
+    [[ "${VAL[$k]}" =~ ^[0-9]+$ ]] || die "$k 不是数字:${VAL[$k]}"
+    [ "${VAL[$k]}" -ge 1 ] && [ "${VAL[$k]}" -le 65535 ] || die "$k 超出 1-65535:${VAL[$k]}"
+done
+[ "${VAL[WIN_HTTP_PORT]}" != "${VAL[WIN_SOCKS_PORT]}" ] \
+    || die "WIN_HTTP_PORT 与 WIN_SOCKS_PORT 不能相同(都监听 0.0.0.0,会抢端口)"
 # 会被拼进 gost 的 socks5://user:pass@host:port,这些字符会破坏 URL / systemd 展开
 BADCH='[@:/[:space:]$"\#'"'"']'
 for k in RES_HOST RES_USER RES_PASS; do
@@ -76,6 +85,7 @@ for k in RES_HOST RES_USER RES_PASS; do
     [[ "${VAL[$k]}" =~ $BADCH ]] && die "$k 含有不支持的字符(@ : / 空白 \$ 引号 \\ #)"
 done
 ok "住宅 = ${VAL[RES_HOST]}:${VAL[RES_PORT]}(用户 ${VAL[RES_USER]}),Clash 端口 ${VAL[CLASH_PORT]},DNS 上游 ${VAL[DNS_UPSTREAM]}"
+ok "WSL → Windows 端口:HTTP ${VAL[WIN_HTTP_PORT]} / SOCKS5 ${VAL[WIN_SOCKS_PORT]}(监听 0.0.0.0,可用 --no-winproxy 不装)"
 
 CLASH_GW=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
 [ -n "$CLASH_GW" ] || die "取不到默认网关(Windows 主机 IP)"
@@ -194,7 +204,7 @@ if [ "$WINPROXY" = 1 ]; then
         systemctl daemon-reload
         systemctl enable gost-winproxy >/dev/null 2>&1
         systemctl restart gost-winproxy
-        ok "gost-winproxy.service 已启用(Windows 用 HTTP :7893 / SOCKS5 :7894)"
+        ok "gost-winproxy.service 已启用(Windows 用 http://<WSL_IP>:${VAL[WIN_HTTP_PORT]} / socks5://<WSL_IP>:${VAL[WIN_SOCKS_PORT]})"
     else
         warn "WSL 未启用 systemd(/etc/wsl.conf [boot] systemd=true),跳过 gost-winproxy"
     fi
@@ -235,4 +245,7 @@ else
 fi
 
 printf '\n%s完成。%s新开终端自动生效;详细检测:bash %s/tools/net_check.sh\n' "$G" "$N" "$SRC"
+if [ "$WINPROXY" = 1 ] && [ -d /run/systemd/system ]; then
+    printf 'Windows 侧代理:HTTP http://<WSL_IP>:%s  SOCKS5 socks5://<WSL_IP>:%s\n' "${VAL[WIN_HTTP_PORT]}" "${VAL[WIN_SOCKS_PORT]}"
+fi
 printf '回滚:sudo %s/uninstall.sh(备份在 %s)\n' "$SRC" "$BK"

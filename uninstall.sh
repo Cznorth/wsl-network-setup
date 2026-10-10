@@ -16,7 +16,7 @@ if [ -f /etc/systemd/system/gost-winproxy.service ]; then
 fi
 
 rm -f /usr/local/bin/proxy-up.sh /usr/local/bin/proxy-down.sh /usr/local/bin/dnsfwd.py \
-      /etc/sudoers.d/wslproxy /etc/gost.env /run/wslproxy-*.pid
+      /etc/sudoers.d/wslproxy /etc/gost.env /run/wslproxy-*.pid /run/wslproxy-winports
 echo "已删除 proxy-up/down、dnsfwd.py、sudoers、/etc/gost.env"
 
 if [ -n "$TARGET_HOME" ] && [ -f "$TARGET_HOME/.bashrc" ]; then

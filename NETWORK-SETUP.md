@@ -62,9 +62,9 @@ WSL 全部 TCP + DNS → **iptables nat REDIRECT(不动路由表)** → redsocks
 | `/etc/redsocks.conf` | redsocks 配置(600);上游 = 本地 gost 链式 `127.0.0.1:12346`(no-auth,无住宅账号);**不能写 `#` 注释** |
 | `/etc/sudoers.d/wslproxy` | 免密执行上面两个脚本 |
 | `~/.bashrc` | 登录时调 proxy-up;`WSL_PROXY=off` 时调 proxy-down |
-| `/etc/gost.env` | **唯一的配置/凭据文件**(600,root):住宅 `RES_HOST/RES_PORT/RES_USER/RES_PASS`、`CLASH_PORT`(默认 7890)、`DNS_UPSTREAM`(默认 8.8.8.8:53)+ `CLASH_GW`(proxy-up 每次登录刷新)。proxy-up 与 gost-winproxy 共用 |
-| `/etc/systemd/system/gost-winproxy.service` | Windows 长期端口单元(开机自启),ExecStart 同样经 Clash 链式 |
-| `/usr/local/bin/gost` | gost 二进制;两处使用:① 链式中间件(proxy-up 拉起,监听 12346) ② gost-winproxy 服务(Windows 用 7893/7894,同样链式) |
+| `/etc/gost.env` | **唯一的配置/凭据文件**(600,root):住宅 `RES_HOST/RES_PORT/RES_USER/RES_PASS`、`CLASH_PORT`(默认 7890)、`DNS_UPSTREAM`(默认 8.8.8.8:53)、`WIN_HTTP_PORT`/`WIN_SOCKS_PORT`(默认 7893/7894,WSL 暴露给 Windows 的端口)+ `CLASH_GW`(proxy-up 每次登录刷新)。proxy-up 与 gost-winproxy 共用 |
+| `/etc/systemd/system/gost-winproxy.service` | Windows 长期端口单元(开机自启),ExecStart 同样经 Clash 链式;端口取自 `/etc/gost.env` 的 `WIN_HTTP_PORT`/`WIN_SOCKS_PORT`(单元内 `Environment=` 只是兜底默认值) |
+| `/usr/local/bin/gost` | gost 二进制;两处使用:① 链式中间件(proxy-up 拉起,监听 12346) ② gost-winproxy 服务(Windows 用 `WIN_HTTP_PORT`/`WIN_SOCKS_PORT`,默认 7893/7894,同样链式) |
 | `~/network-backup/` | 上述文件快照 + 旧 mihomo config |
 | `~/.config/mihomo/` | 旧 mihomo 方案残留(服务已 disabled,不再使用) |
 
@@ -98,7 +98,7 @@ WSL_PROXY=off
 
 # 换住宅/账号/Clash 端口:改 /etc/gost.env(RES_*/CLASH_PORT);/etc/redsocks.conf 不用动(上游固定是本地 gost)
 # 然后: sudo -n /usr/local/bin/proxy-down.sh && sudo -n /usr/local/bin/proxy-up.sh && sudo systemctl restart gost-winproxy
-# 看链路中间件(应有 gost 12346 和 gost-winproxy 7893/7894)
+# 看链路中间件(应有 gost 12346 和 gost-winproxy 7893/7894(或你改过的 WIN_*_PORT)
 pgrep -af "gost -L"
 # 链式探活日志(chain_check / dnsfwd_check 结果)
 tail -20 /tmp/wslproxy-up.log
@@ -135,20 +135,22 @@ WSL 内跑 `gost`(systemd 单元 `gost-winproxy.service`,**普通用户 cznorth 
 
 | 协议 | 地址 |
 |---|---|
-| HTTP | `http://<WSL_IP>:7893` |
-| SOCKS5 | `socks5://<WSL_IP>:7894` |
+| HTTP | `http://<WSL_IP>:${WIN_HTTP_PORT}`(默认 7893) |
+| SOCKS5 | `socks5://<WSL_IP>:${WIN_SOCKS_PORT}`(默认 7894) |
 | 出口 | 新加坡住宅 `<RES_IP>` |
 
 ```powershell
 # PowerShell / Claude Code(Windows 版)
-$env:HTTPS_PROXY="http://172.21.x.x:7893"; $env:HTTP_PROXY=$env:HTTPS_PROXY
+$env:HTTPS_PROXY="http://172.21.x.x:7893"; $env:HTTP_PROXY=$env:HTTPS_PROXY   # 端口跟 /etc/gost.env 的 WIN_HTTP_PORT
 claude
-# SOCKS5 场景(如某些只认 socks 的客户端):172.21.x.x:7894
+# SOCKS5 场景(如某些只认 socks 的客户端):172.21.x.x:7894   # = WIN_SOCKS_PORT
 ```
 
 - WSL IP 会变:`wsl hostname -I` 重取(取 IPv4)。
 - 首次连接 Windows 防火墙可能弹窗,允许专用网络。
 - 单元文件 `/etc/systemd/system/gost-winproxy.service`;回滚:`sudo systemctl disable --now gost-winproxy`。
+- 换端口:改 `/etc/gost.env` 的 `WIN_HTTP_PORT` / `WIN_SOCKS_PORT` → `sudo systemctl restart gost-winproxy`(或直接新开终端,proxy-up 发现端口变了会自动重启);两个值不能相同,范围 1-65535。不想装整个服务:`sudo ./install.sh --no-winproxy`。
+- 从旧版本升级(端口曾写死在单元里):重跑一次 `sudo ./install.sh`,会用新模板重写单元并补上 `WIN_HTTP_PORT`/`WIN_SOCKS_PORT` 到 `/etc/gost.env`;不改配置则仍是 7893/7894。
 - 该服务与 WSL 透明代理**共用同一链路**(Clash → 住宅),`CLASH_GW` 由 proxy-up 登录时刷新并按需重启本服务;
 - **为什么它不会重演 mihomo 的冷启动问题**:纯用户态转发进程,不开 TUN、不抢路由、不劫持 DNS、不用 root、`After=network.target`(不等网络就绪),systemd 侧只是一个普通 `Type=simple` 服务。
 
@@ -169,6 +171,7 @@ claude
 | 需求 | 改动 |
 |---|---|
 | 换住宅 IP/端口/账号 | `/etc/gost.env` 的 `RES_*`;换 Clash 端口改 `CLASH_PORT`;`/etc/redsocks.conf` 不动。改完 down→up + 重启 gost-winproxy |
+| 改 WSL 给 Windows 的端口 | `/etc/gost.env` 的 `WIN_HTTP_PORT`(默认 7893)/ `WIN_SOCKS_PORT`(默认 7894),`sudo systemctl restart gost-winproxy` |
 | 排除某域名/IP 走直连 | `proxy-up.sh` 的 WSLPROXY 链加 `-d <cidr> -j RETURN`(域名级需另配,redsocks 不支持) |
 | 改端口 | `proxy-up.sh` 里 REDIRECT `--to-ports` 和 redsocks.conf `local_port`、dnsfwd 监听 |
 | 完全裸连 | `export WSL_PROXY=off` 后新开 shell,或 `sudo -n /usr/local/bin/proxy-down.sh` |
@@ -246,7 +249,7 @@ WSL → iptables REDIRECT → dnsfwd(1053)  ┘    Hop2: 住宅 socks5(<RES_IP>:
 **依赖与注意**:
 - Windows Clash 必须常开(开机自启);Allow LAN 保持开启(`0.0.0.0:7890`)。
 - Windows 重启后 Clash 若晚于 WSL 首个终端启动:首个终端降级裸连,Clash 起来后**开个新终端**即恢复(proxy-up 每次登录重跑)。
-- gost-winproxy 现在也依赖 Clash;Clash 挂了你从 Windows 也连不上 7893/7894。
+- gost-winproxy 现在也依赖 Clash;Clash 挂了你从 Windows 也连不上 `WIN_HTTP_PORT`/`WIN_SOCKS_PORT`(默认 7893/7894)。
 - 排障顺序:`tail -20 /tmp/wslproxy-up.log`(chain_check/dnsfwd_check 结果)→ `pgrep -af "gost -L"` → `curl -s https://ifconfig.me`。
 
 ---
@@ -262,7 +265,7 @@ WSL → iptables REDIRECT → dnsfwd(1053)  ┘    Hop2: 住宅 socks5(<RES_IP>:
 | `files/proxy-down.sh` | `/usr/local/bin/` | 拆规则 + 杀进程;gost 按端口匹配(网关变了也杀得掉) |
 | `files/dnsfwd.py` | `/usr/local/bin/` | DNS 转发器 v2;默认上游 = 本地 gost 链式,不含凭据 |
 | `files/redsocks.conf` | `/etc/` | 无 `#` 注释(见 §12) |
-| `files/gost-winproxy.service` | `/etc/systemd/system/` | `__USER__` 安装时替换为当前用户 |
+| `files/gost-winproxy.service` | `/etc/systemd/system/` | `__USER__` 安装时替换为当前用户;端口走 `${WIN_HTTP_PORT}`/`${WIN_SOCKS_PORT}` 环境变量展开 |
 | `tools/net_check.sh` | — | 检测:`bash tools/net_check.sh [-q 快速] [-j JSON] [-L 只测延迟]`;含全链路逐跳延迟(见 §5) |
 | `tools/dnstest.py` | — | DNS 测速:`python3 tools/dnstest.py 1053` |
 
