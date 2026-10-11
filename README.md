@@ -7,7 +7,58 @@ WSL2 里让**所有出口**(含 DNS、非交互 shell、不读环境变量的程
 - `gost-winproxy`(systemd,给 Windows 提供 HTTP / SOCKS5 长期端口,端口可配:`WIN_HTTP_PORT` 默认 7893、`WIN_SOCKS_PORT` 默认 7894)
 - **不降级(fail-closed)**:链路任一跳不通时 TCP 规则照装,外网直接不通,绝不静默落回直连;并带 filter 出站杀开关(非代理的 UDP/ICMP/IPv6 一律拒绝,不泄露真实 IP);要裸连只能显式 `WSL_PROXY=off` / `proxy-down.sh`
 
-## 安装
+## 三种方案总览
+
+同一个目标(固定住宅出口 + 不泄露真实 IP),按运行位置分三种,可并存:
+
+| | 方案一:WSL 透明代理 | 方案二:远程 SSH 服务器 | 方案三:本地 Docker 容器 |
+|---|---|---|---|
+| 运行位置 | WSL2 本体 | 海外 VPS 上的 Docker 容器,Windows 经 `rewsl` 进入 | Windows Docker Desktop 里的容器 |
+| 接管方式 | `iptables nat REDIRECT` + redsocks + dnsfwd | 容器内同款透明代理,服务器直连住宅 | 容器内 `iptables OUTPUT REDIRECT` + redsocks + dnsfwd |
+| 出口链路 | WSL → Clash → 住宅 SOCKS5 | 服务器 → 住宅 SOCKS5(不经 Clash) | 容器 → Clash → 住宅 SOCKS5(可 `USE_CLASH=0` 直连) |
+| 断链行为 | fail-closed,外网不通且不泄露 | 同左(容器内杀开关) | 同左 |
+| 访问 Windows 文件 | 原生 `/mnt/c`、`/mnt/d` | sshfs 经反向隧道挂载,容器内 `win <cmd>` 在 Windows 执行 | 直接挂载 `C:`、`D:` 到 `/mnt/c`、`/mnt/d` |
+| 进入方式 | 直接用 WSL | Windows 上 `rewsl`(多台为 `rewsl-<name>`) | PowerShell 快捷命令 `bash1`、`bash2`… |
+| 部署入口 | `./setup.sh`(或 `install.sh`) | `./deploy-server.sh --host … --name …` | `docker compose up -d --build` 或 `tools/setup-docker-proxy.ps1` |
+| 适合场景 | 日常开发,所有程序零配置走代理 | 要一台与本机隔离、长期在线、固定海外网络的工作环境 | 要隔离环境或第二/第三个出口,不想动 WSL 网络栈 |
+| 主要依赖 | systemd、Windows Clash(Allow LAN) | 能直连住宅的服务器、WSL(UAC 启用 sshd 一次) | Docker Desktop、Clash(Allow LAN) |
+
+**怎么选**
+
+- 只想让当前 WSL 全部流量走住宅:方案一,开机零守护进程,冷启动最稳。
+- 需要一个不依赖本机在线网络质量的海外工作机,或住宅只允许服务器直连:方案二。
+- 想要与 WSL 隔离的可丢弃环境,或同时用多个出口(`-Name proxy2`):方案三。
+- 三者互不冲突:方案一占用 WSL 的 7893/7894,方案三容器暴露 7895/7896(多实例自动分配),方案二的反向隧道只占服务器本机 `127.0.0.1:2222`。
+
+各方案细节见下文:[安装](#安装方案一wsl)(方案一)、[服务器部署](#服务器部署方案二远程-ssh)(方案二)、[Docker 单容器代理](#docker-单容器代理方案三本地-docker)(方案三)。三种方案里的 Claude Code 登录态相互独立,各自登录;容器内放入 `/root/claudecode-web` 后可随容器自启 Claude Code Web(宿主默认端口 8788)。
+
+### 三种方案都要装 claudecode-app(Claude Code Web)
+
+`claudecode-app` 是 Claude Code 的网页界面(纯 Python 标准库,默认端口 8787,配置与令牌在 `~/.claudecode-web/config.json`),依赖该环境里已装好并登录的 `claude` CLI。源码仓库为私有 `Cznorth/claudecode-web`,下面的 `<SRC>` 指你机器上已有的源码目录(如 `/mnt/d/code/claudecode-app`)。
+
+| 方案 | 安装 | 访问 |
+|---|---|---|
+| 一:WSL | `./setup.sh --web <SRC>`(或 `<SRC>/scripts/install-service.sh`),装成 systemd 用户服务,开机经 linger 自启 | `http://localhost:8787/?token=<令牌>` |
+| 二:远程 SSH | 先 `ssh` 到服务器,再 `tar -C <SRC> --exclude=.git --exclude=__pycache__ -cf - . \| docker exec -i <容器> sh -c 'mkdir -p /root/claudecode-web && tar -x -C /root/claudecode-web'`;容器入口脚本发现 `/root/claudecode-web/app.py` 即自动启动并由看门狗守护;容器内先 `claude` 登录 | 本机 `ssh -L 8788:127.0.0.1:8788 root@<服务器>`,浏览器开 `http://localhost:8788/?token=<令牌>` |
+| 三:本地 Docker | 在 PowerShell 里:`tar -C <SRC的Windows路径> --exclude=.git --exclude=__pycache__ -cf - . \| docker exec -i <容器> sh -c "mkdir -p /root/claudecode-web && tar -x -C /root/claudecode-web"`;存在即自启,看门狗守护;容器内先 `claude` 登录 | `http://localhost:8788/?token=<令牌>`(宿主端口 `.env` 的 `WEB_PORT`,默认 8788) |
+
+- 容器方案的 `/root` 是命名卷,`claudecode-web` 目录、令牌和登录态在重建容器后保留;`down -v` 会清掉。
+- 想让多个实例共用同一令牌,把 `~/.claudecode-web/config.json` 里的 `token` 拷到另一实例同名文件后重启服务。
+- 容器内不做 git 自更新(私有仓库无凭据),更新时重新拷一遍源码。
+
+### 本地方案的 Windows 侧代理端口(给指纹浏览器 / Windows 程序用)
+
+方案一和方案三都会在 Windows 上开放固定的本机代理端口,指纹浏览器里选「自定义代理」,协议 HTTP 或 SOCKS5,主机 `127.0.0.1`,即可使用同一个住宅 IP。
+
+| 方案 | HTTP | SOCKS5 | 备注 |
+|---|---|---|---|
+| 一:WSL(`gost-winproxy`) | `127.0.0.1:7893` | `127.0.0.1:7894` | `wslproxy.env` 里 `WIN_HTTP_PORT` / `WIN_SOCKS_PORT` 可改;`install.sh --no-winproxy` 会关闭 |
+| 三:本地 Docker 默认实例 | `127.0.0.1:7895` | `127.0.0.1:7896` | `.env` 里 `HTTP_PORT` / `SOCKS_PORT` 可改;只绑本机,要给局域网用才改 `PROXY_BIND_ADDRESS` |
+| 三:`setup-docker-proxy.ps1` 的第 N 个实例 | 7897、7899… | 7898、7900… | 脚本自动分配并检查占用,端口记录在 `docker-proxies\` |
+
+验证:`curl.exe -x socks5h://127.0.0.1:7894 https://api.ipify.org`(换成对应端口),返回的应是住宅 IP。浏览器里建议用 `socks5h`(或指纹浏览器的 SOCKS5 选项),让 DNS 也走代理,避免本机解析泄露。
+
+## 安装(方案一:WSL)
 
 ```bash
 git clone https://github.com/Cznorth/wsl-network-setup.git && cd wsl-network-setup
@@ -21,7 +72,7 @@ bash tools/net_check.sh -L                                # 只测延迟:逐跳�
 
 前提:Windows Clash 已运行并开启 **Allow LAN**(默认 7890)。卸载:`sudo ./uninstall.sh`。
 
-## Docker 单容器代理
+## Docker 单容器代理(方案三:本地 Docker)
 
 仓库也提供了一个独立 Docker 透明代理容器。它在容器内使用 `iptables OUTPUT REDIRECT` + `redsocks` + `dnsfwd`，接管容器内全部 TCP 和 DNS；同时向 Windows 暴露 HTTP `7895` 和 SOCKS5 `7896`。链路为：容器 → Windows Clash → 住宅 SOCKS5。住宅账号放在本地 `.env`，不会写入镜像或 Git。
 
@@ -99,7 +150,7 @@ bash2
 
 原理、踩坑与排障详见 [NETWORK-SETUP.md](./NETWORK-SETUP.md)。
 
-## 服务器部署(Docker + Windows 盘挂载 + `win` + `rewsl`)
+## 服务器部署(方案二:远程 SSH)
 
 在 WSL 里一条命令把一台海外服务器配成「WSL 式」环境(透明代理容器、挂载 Windows 全部盘、容器内 `win <cmd>` 在 Windows 执行、Windows 上 `rewsl` 直接进容器):
 
