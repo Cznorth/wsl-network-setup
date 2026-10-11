@@ -42,6 +42,17 @@ Docker 构建默认使用 DaoCloud 的 Ubuntu 镜像、阿里云 Ubuntu APT 镜�
 
 停止容器：`docker compose down`。
 
+每个 Compose 项目都有独立的 `home` 命名卷，挂载到 `/root`。重启、`down` 后重新启动、重建容器均保留该目录，包括 shell 配置、SSH 密钥、用户目录下的工具和登录配置；不同实例互不共享登录状态。不要用 `docker compose down -v` 删除需要保留的卷。C、D 盘中的文件继续保存在 Windows。
+
+为了让 Claude Code 程序本身也跨重建保留，在容器内使用官方原生安装方式（安装到用户目录）：
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+claude
+```
+
+持久化不保证认证永不过期。`apt install` 或默认全局 npm 安装写到 `/usr` 等系统目录的内容不在 home 卷中，重建时需重新安装或加入 Dockerfile；用户工具建议安装到 `/root/.local`、`/root/.npm-global` 或使用 home 下的 nvm。
+
 容器基于 Ubuntu 24.04，并预装 `git`、`curl`、`iproute2`、`iptables`、DNS 工具、`ping` 和常用编辑器。它同时挂载 Windows 的整个 `C:`、`D:` 盘，容器内路径与 WSL 一致：`/mnt/c`、`/mnt/d`。快速进入 Bash：
 
 ```bash

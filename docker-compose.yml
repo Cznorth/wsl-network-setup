@@ -14,6 +14,7 @@ services:
     # Explicitly clear inherited Docker/host proxy variables. Transparent
     # iptables routing must handle traffic instead of an explicit host proxy.
     environment:
+      PATH: /root/.local/bin:/root/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       # These values come from the Compose .env file or --env-file. Keeping
       # them here lets every multi-instance project use its own credentials.
       RES_HOST: "${RES_HOST:?RES_HOST is required}"
@@ -43,6 +44,11 @@ services:
       - "${PROXY_BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-7893}:7893"
       - "${PROXY_BIND_ADDRESS:-127.0.0.1}:${SOCKS_PORT:-7894}:7894"
     volumes:
+      # Compose prefixes this volume with the project name: each instance
+      # retains its own home, login state and user-installed tools.
+      - type: volume
+        source: home
+        target: /root
       # Full Windows drives, matching WSL's /mnt/c and /mnt/d paths.
       - type: bind
         source: "C:/"
@@ -56,3 +62,6 @@ services:
       timeout: 15s
       retries: 3
       start_period: 10s
+
+volumes:
+  home:
