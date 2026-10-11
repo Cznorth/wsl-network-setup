@@ -98,3 +98,16 @@ bash2
 > 本仓库为**脱敏版**:住宅 IP/账号/密码/内网地址已替换为占位符(`<RES_IP>` / `<user>` / `<pass>`)。凭据只存在本机 `/etc/gost.env`(600)和你自己的 `wslproxy.env`(已 gitignore)。
 
 原理、踩坑与排障详见 [NETWORK-SETUP.md](./NETWORK-SETUP.md)。
+
+## 服务器部署(Docker + Windows 盘挂载 + `win` + `rewsl`)
+
+在 WSL 里一条命令把一台海外服务器配成「WSL 式」环境(透明代理容器、挂载 Windows 全部盘、容器内 `win <cmd>` 在 Windows 执行、Windows 上 `rewsl` 直接进容器):
+
+```bash
+./deploy-server.sh --host 1.2.3.4 --name hk1 --with-claude --with-pi
+```
+
+- 需要:WSL、服务器 Debian/Ubuntu 且能直连住宅代理。服务器密码只在 `ssh-copy-id` 时输入;`RES_*` 来自 `wslproxy.env`(缺项会询问),只写入服务器 `/opt/wslproxy/.env`。
+- 全程幂等;Windows 侧仅首次启用 sshd 需要 UAC 确认。每台服务器独立密钥/计划任务(`wslproxy-tunnel-<name>`)/命令(`rewsl-<name>`);同一 Windows 同时只能反向隧道到各服务器自己的 `127.0.0.1:2222`,互不冲突。
+- `--with-claude` / `--with-pi` 会把登录态 / API Key 复制到服务器容器,并把运行环境说明与本机全局 `CLAUDE.md` / `APPEND_SYSTEM.md` 一并写入。
+- 结构:`files/server/bootstrap.sh`(服务器端)、`files/windows/*.ps1`(Windows 端)、`files/agents/`(agent 安装与环境提示)、`docker-compose.server.yml`。

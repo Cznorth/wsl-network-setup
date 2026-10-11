@@ -1,0 +1,6 @@
+[Unit]
+Description=Forward bridge:2222 to loopback tunnel
+Requires=wslproxy-winssh.socket
+After=wslproxy-winssh.socket
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:2222

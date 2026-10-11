@@ -1,0 +1,7 @@
+[Unit]
+Description=Expose Windows SSH tunnel to the wslproxy docker bridge only
+[Socket]
+ListenStream=192.168.64.1:2222
+FreeBind=true
+[Install]
+WantedBy=sockets.target

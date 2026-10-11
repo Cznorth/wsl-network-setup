@@ -1,0 +1,32 @@
+#!/bin/sh
+# win [命令...]  在 Windows 主机上执行命令(经反向 SSH 隧道)。
+# 当前目录在 /mnt/<盘>/ 下时自动映射为 <盘>:\...;不带参数则打开交互 cmd。
+HOST=${WIN_SSH_HOST:-192.168.64.1}
+PORT=${WIN_SSH_PORT:-2222}
+USER_=${WIN_SSH_USER:-}
+KEY=${WIN_SSH_KEY:-/etc/wslproxy/winssh}
+
+[ -n "$USER_" ] || { echo "win: 未设置 WIN_SSH_USER(Windows 用户名)" >&2; exit 1; }
+[ -r "$KEY" ] || { echo "win: 缺少密钥 $KEY" >&2; exit 1; }
+
+dir=
+case "$PWD" in
+  /mnt/[a-zA-Z]|/mnt/[a-zA-Z]/*)
+    d=${PWD#/mnt/}; drive=${d%%/*}; rest=${d#"$drive"}
+    drive=$(printf %s "$drive" | tr a-z A-Z)
+    dir="$drive:$(printf %s "$rest" | tr / '\\')"
+    [ "$dir" = "$drive:" ] && dir="$drive:\\"
+    ;;
+esac
+
+pre=
+[ -n "$dir" ] && pre="cd /d \"$dir\" && "
+if [ $# -eq 0 ]; then
+  [ -n "$dir" ] && cmd="cd /d \"$dir\" && cmd" || cmd=
+  tty=-tt
+else
+  cmd="$pre$*"; tty=
+fi
+exec ssh $tty -i "$KEY" -p "$PORT" -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/root/.ssh/known_hosts_win \
+  -o ServerAliveInterval=30 "$USER_@$HOST" $cmd

@@ -1,0 +1,81 @@
+# 服务器版:服务器可直连住宅代理,不经 Clash(USE_CLASH=0)。
+# 用法: docker compose -f docker-compose.server.yml --env-file .env up -d --build
+# 与 docker-compose.yml 的区别:无 host.docker.internal;
+# Windows 盘经宿主机 sshfs(/mnt/win/<盘>,见 wslproxy-win@.service)挂到容器 /mnt/<盘>,
+# 容器内 `win` 命令经反向隧道在 Windows 上执行命令。工作区目录由 WORKSPACE 指定,挂到 /work。
+# 一般不要手动用本文件:用 ./deploy-server.sh 部署(会生成 .env 与 compose.drives.yml)。
+name: wslproxy-srv
+services:
+  residential-proxy:
+    build:
+      context: .
+      args:
+        GOST_VERSION: "2.12.0"
+        UBUNTU_IMAGE: "${UBUNTU_IMAGE:-ubuntu:24.04}"
+        APT_MIRROR: "${APT_MIRROR:-archive.ubuntu.com}"
+        GOST_DOWNLOAD_BASE: "${GOST_DOWNLOAD_BASE:-https://github.com/ginuerzh/gost/releases/download}"
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    working_dir: /work
+    environment:
+      PATH: /root/.local/bin:/root/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      RES_HOST: "${RES_HOST:?RES_HOST is required}"
+      RES_PORT: "${RES_PORT:-443}"
+      RES_USER: "${RES_USER:?RES_USER is required}"
+      RES_PASS: "${RES_PASS:?RES_PASS is required}"
+      USE_CLASH: "0"
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      WIN_SSH_USER: "${WIN_USER:-}"
+      DNS_UPSTREAM: "${DNS_UPSTREAM:-8.8.8.8:53}"
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      all_proxy: ""
+    dns:
+      - 127.0.0.1
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    ports:
+      # 只绑本机回环,远程用 SSH 隧道访问
+      - "127.0.0.1:${HTTP_PORT:-7893}:7893"
+      - "127.0.0.1:${SOCKS_PORT:-7894}:7894"
+    networks:
+      - default
+    volumes:
+      - type: volume
+        source: home
+        target: /root
+      # Windows 盘的 bind(/mnt/win/<盘> -> /mnt/<盘>,rslave)由 deploy-server.sh 生成到 compose.drives.yml,
+      # 经 .env 的 COMPOSE_FILE 自动合并。
+      # `win` 用的 Windows 登录密钥(只读)
+      - type: bind
+        source: /opt/wslproxy/keys/winssh
+        target: /etc/wslproxy/winssh
+        read_only: true
+      - type: bind
+        source: "${WORKSPACE:-/srv/work}"
+        target: /work
+        bind:
+          create_host_path: true
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS https://api.ipify.org >/dev/null"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 10s
+
+networks:
+  # 固定网段,使宿主机 192.168.64.1:2222 转发(wslproxy-winssh.socket)对应稳定
+  default:
+    ipam:
+      config:
+        - subnet: 192.168.64.0/20
+          gateway: 192.168.64.1
+
+volumes:
+  home:

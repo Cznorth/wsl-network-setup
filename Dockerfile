@@ -41,8 +41,9 @@ RUN case "${TARGETARCH:-amd64}" in \
     && rm -rf /tmp/gost /tmp/gost.tgz
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-COPY files/dnsfwd.py /usr/local/bin/dnsfwd.py
-RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
+COPY files/proxy-up.sh files/proxy-down.sh files/dnsfwd.py files/win /usr/local/bin/
+COPY files/redsocks.conf /etc/redsocks.conf
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh /usr/local/bin/proxy-up.sh /usr/local/bin/proxy-down.sh /usr/local/bin/win
 
 EXPOSE 7893 7894
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

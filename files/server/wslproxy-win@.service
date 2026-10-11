@@ -1,0 +1,12 @@
+[Unit]
+Description=Mount Windows drive %i via reverse SSH tunnel (sshfs)
+After=network-online.target
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+ExecStartPre=-/bin/sh -c "l=$$(echo %i | tr A-Z a-z); fusermount -uz /mnt/win/$$l; mkdir -p /mnt/win/$$l"
+ExecStart=/bin/sh -c ". /opt/wslproxy/keys/win.env; l=$$(echo %i | tr A-Z a-z); exec /usr/bin/sshfs -f -p 2222 -o IdentityFile=/opt/wslproxy/keys/winssh,IdentitiesOnly=yes,StrictHostKeyChecking=accept-new,allow_other,ServerAliveInterval=15,ServerAliveCountMax=3 $$WIN_USER@127.0.0.1:/%i:/ /mnt/win/$$l"
+ExecStopPost=-/bin/sh -c "l=$$(echo %i | tr A-Z a-z); fusermount -uz /mnt/win/$$l"
+[Install]
+WantedBy=multi-user.target

@@ -33,7 +33,7 @@ DNS_PORT=1053
 TCP_PORT=12345
 GOST_PIDFILE=/run/wslproxy-gost.pid
 DNSFWD_PIDFILE=/run/wslproxy-dnsfwd.pid
-LOG=/tmp/wslproxy-up.log
+LOG=${WSLPROXY_LOG:-/tmp/wslproxy-up.log}
 
 log(){ echo "[$(date '+%F %T')] $*" >>"$LOG"; }
 
@@ -41,10 +41,30 @@ log(){ echo "[$(date '+%F %T')] $*" >>"$LOG"; }
 # 合法出站只有 回环/私网(含 Clash 网关)。非 53 的 UDP、ICMP、IPv6、直连住宅的 TCP
 # 全部 REJECT。TCP 与 DNS 的 nat REDIRECT 发生在 filter 之前,目的地已是 127.0.0.1,不受影响。
 # 放在脚本最前:缩短"规则未装"的窗口。proxy-down.sh / WSL_PROXY=off 才会拆除。
+# 按 KEY=VALUE 取值,不 source(防止密码里的特殊字符被 shell 解释)
+# 放在杀开关之前:USE_CLASH=0 时杀开关需要放行住宅出口 IP
+envget(){ grep -s "^$1=" "$GOSTENV" | tail -n1 | cut -d= -f2-; }
+RES_HOST=$(envget RES_HOST)
+RES_PORT=$(envget RES_PORT)
+RES_USER=$(envget RES_USER)
+RES_PASS=$(envget RES_PASS)
+CLASH_PORT=$(envget CLASH_PORT); CLASH_PORT=${CLASH_PORT:-7890}
+DNS_UPSTREAM=$(envget DNS_UPSTREAM); DNS_UPSTREAM=${DNS_UPSTREAM:-8.8.8.8:53}
+USE_CLASH=$(envget USE_CLASH); USE_CLASH=${USE_CLASH:-1}   # 0=住宅可直连,不经 Clash
+CLASH_HOST=$(envget CLASH_HOST)                            # 空=取默认网关(WSL);容器里填 host.docker.internal
+resolve_ipv4(){ getent ahostsv4 "$1" 2>/dev/null | awk 'NR==1{print $1; exit}'; }
+RES_IP=""
+if [ "$USE_CLASH" = 0 ] && [ -n "$RES_HOST" ]; then
+    if [[ "$RES_HOST" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then RES_IP=$RES_HOST; else RES_IP=$(resolve_ipv4 "$RES_HOST"); fi
+fi
+
 IPT6=/usr/sbin/ip6tables
 killswitch_up(){
     "$IPT" -N WSLKILL 2>/dev/null || "$IPT" -F WSLKILL
     "$IPT" -A WSLKILL -o lo -j ACCEPT
+    # 入站连接的回包(容器端口映射、外部客户端):非 NEW 的连接不是本机主动外连
+    "$IPT" -A WSLKILL -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    [ -n "$RES_IP" ] && "$IPT" -A WSLKILL -d "$RES_IP"/32 -p tcp -j ACCEPT
     local net
     for net in 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 224.0.0.0/4; do
         "$IPT" -A WSLKILL -d "$net" -j ACCEPT
@@ -66,14 +86,6 @@ killswitch_up(){
 killswitch_up
 log "killswitch installed (filter OUTPUT -> WSLKILL, v4+v6)"
 
-# 按 KEY=VALUE 取值,不 source(防止密码里的特殊字符被 shell 解释)
-envget(){ grep -s "^$1=" "$GOSTENV" | tail -n1 | cut -d= -f2-; }
-RES_HOST=$(envget RES_HOST)
-RES_PORT=$(envget RES_PORT)
-RES_USER=$(envget RES_USER)
-RES_PASS=$(envget RES_PASS)
-CLASH_PORT=$(envget CLASH_PORT); CLASH_PORT=${CLASH_PORT:-7890}
-DNS_UPSTREAM=$(envget DNS_UPSTREAM); DNS_UPSTREAM=${DNS_UPSTREAM:-8.8.8.8:53}
 if [ -z "$RES_HOST" ] || [ -z "$RES_PORT" ]; then
     log "缺少 $GOSTENV 里的 RES_HOST/RES_PORT,不装任何规则"
     exit 0
@@ -82,10 +94,18 @@ RES_AUTH=""
 [ -n "$RES_USER" ] && RES_AUTH="$RES_USER:$RES_PASS@"
 
 # Windows 主机网关(Clash 监听 0.0.0.0:CLASH_PORT,Allow LAN;WSL 经网关 IP 可达)
-CLASH_GW=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
+CLASH_GW=""
+[ -n "$CLASH_HOST" ] && CLASH_GW=$(resolve_ipv4 "$CLASH_HOST")
+[ -n "$CLASH_GW" ] || CLASH_GW=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
 [ -n "$CLASH_GW" ] || CLASH_GW=172.21.0.1
 GOST_ANY='^/usr/local/bin/gost -L=socks5://127\.0\.0\.1:12346 '
-GOST_PAT="$GOST_ANY"'-F=socks5://'"$CLASH_GW"':'"$CLASH_PORT"' '
+if [ "$USE_CLASH" = 0 ]; then
+    CLASH_HOP=()
+    GOST_PAT="$GOST_ANY"
+else
+    CLASH_HOP=(-F=socks5://"$CLASH_GW":"$CLASH_PORT")
+    GOST_PAT="$GOST_ANY"'-F=socks5://'"$CLASH_GW"':'"$CLASH_PORT"' '
+fi
 DNSFWD_PAT='^python3 /usr/local/bin/dnsfwd\.py'
 
 # ---------- 1) gost 链式代理:本地 socks5(no-auth) → Clash → 住宅 ----------
@@ -93,7 +113,7 @@ if ! pgrep -f "$GOST_PAT" >/dev/null 2>&1; then
     # 网关 IP 变了(WSL 重启)时旧进程仍占着 12346,先清掉
     pkill -f "$GOST_ANY" 2>/dev/null && sleep 0.3
     setsid nohup "$GOST" -L=socks5://127.0.0.1:12346 \
-        -F=socks5://"$CLASH_GW":"$CLASH_PORT" \
+        "${CLASH_HOP[@]}" \
         -F=socks5://"$RES_AUTH$RES_HOST":"$RES_PORT" \
         >>"$LOG" 2>&1 </dev/null &
     sleep 0.5
