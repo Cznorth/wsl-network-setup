@@ -127,7 +127,7 @@ bash tools/net_check.sh -L      # LAT_ROUNDS=5 LAT_URL=https://api.anthropic.com
 
 原理:手工逐步走 SOCKS5(连 Clash → CONNECT 住宅 → 住宅 greeting → 认证 → CONNECT 目标),每步单独计时;Clash 会先回 CONNECT 成功再异步建链,所以用"住宅认证往返"作纯 RTT,建链开销 = (Clash CONNECT + 住宅 greeting) − RTT。跳点参数从 gost 链式进程命令行解析,无需 root;③ 偏高时会提示节点所在国家并建议切 SG/HK 节点。
 
-⚠️ **别用 ping 判断代理通不通**:ICMP 不经 iptables REDIRECT,SOCKS5 也无法承载 ICMP,ping 一律裸连(→ Windows)。所以 `ping google.com` 不通是正常的,`ping 8.8.8.8` 通也不代表走了住宅。测连通用 `curl`。
+⚠️ **别用 ping 判断代理通不通**:ICMP 不经 iptables REDIRECT,SOCKS5 也无法承载 ICMP;2026-10-11 起被杀开关拒绝,**ping 一律不通是正常的**。测连通用 `curl`。
 
 ## 6. 给 Windows 用的长期端口(gost,开机自启)
 
@@ -163,8 +163,8 @@ claude
 | 开机/冷启动 | ✗ 会卡 | ✓ 零守护进程 |
 | 读 env 的工具 | ✓ | ✓(REDIRECT 透明) |
 | DNS | fake-ip | 真实 IP 经住宅解析(无泄露) |
-| UDP 非 DNS(QUIC/443) | ✓ | ✗ 走裸连(TCP 回落正常,影响小) |
-| ICMP(ping) | 假应答(无意义) | ✗ 裸连,google 等 ping 不通(结构性,无法修) |
+| UDP 非 DNS(QUIC/443) | ✓ | ✗ 被杀开关拒绝(不泄露;应用回落 TCP) |
+| ICMP(ping) | 假应答(无意义) | ✗ 被杀开关拒绝(ping 一律不通,不泄露) |
 
 ## 8. 想改东西 → 动哪里
 
@@ -194,7 +194,7 @@ claude
 ## 11. 已知 / 待办 / 踩坑记录
 
 - **`wsl` 冷启动无回显的根因(2026-10-04 定位)**:开机 systemd 服务(mihomo unit)+ TUN 抢路由/`ExecStartPre` 拖 job,WSL 交互会话等 systemd → 无回显。**修复=开机不跑任何代理守护进程**,改登录时装 iptables(不动路由表)。复现/验证:`systemd-analyze blame` 显示冷启动 1.4s、无卡顿 job;mihomo 版仍复现,故弃用。
-- UDP 非 53 端口(QUIC 等)和 ICMP(ping)走裸连,未强制住宅;SOCKS5 不支持 ICMP,无解。
+- UDP 非 53 端口(QUIC 等)和 ICMP(ping)、IPv6:SOCKS5 承载不了,2026-10-11 起由 filter 杀开关直接拒绝(不泄露,见 §15)。
 - DNS 冷查询仍 ~1.8s:住宅 SOCKS5 严格逐步握手(问候/认证/CONNECT 不接受管线化,实测全部被断),上游 TCP 空闲 ~2s 即被关(8.8.8.8;1.1.1.1 ~10s、9.9.9.9 <30s),预认证会话 <30s 失效。要消除只能每 ~15s 对住宅保活建连,流量特征异常,**故意不做**;靠缓存 + serve-stale 覆盖常用域名。
 - dnsfwd 运行中意外退出 → DNS 劫持规则仍在 → DNS 全断,直到下次 `proxy-up.sh`(新开终端会自动跑)。
 - 非交互会话在"任意交互登录之前"是裸连;已登录过则全局生效。
@@ -282,10 +282,16 @@ WSL → iptables REDIRECT → dnsfwd(1053)  ┘    Hop2: 住宅 socks5(<RES_IP>:
 - `WSLPROXY` 链与 `OUTPUT -p tcp -j WSLPROXY` 无条件安装,TCP 一律 REDIRECT 到 redsocks;链路死则连接失败。
 - dnsfwd 无条件拉起;探活失败只写日志(`chain unhealthy -> 照样装规则`),不再据此跳过规则。
 
-**仍存在的缺口(按需再收紧)**:
+**出站杀开关**(2026-10-11 追加,`proxy-up.sh` §0,放在脚本最前):
+- IPv4 `filter OUTPUT -j WSLKILL`:放行回环/私网(含 Clash 网关),**其余一律 REJECT**;IPv6 同理(仅放行回环/链路本地/ULA/组播)。
+- 因此非 53 的 UDP、ICMP、IPv6、直连住宅的 TCP 全部被拒;TCP 与 DNS 的 nat REDIRECT 在 filter 之前生效,目的地已是 127.0.0.1,不受影响。
+- DNS 劫持无条件安装:dnsfwd 答不出 = DNS 不通,不回落 Windows 解析器。
+- 实测(同日):STUN/UDP、ping、`curl -6`、直连 `130.12.42.41:443` 均不通;`curl -4 ifconfig.me` = `130.12.42.41`。
+- `proxy-down.sh` / `WSL_PROXY=off` 会拆除杀开关(显式裸连)。
+
+**仍存在的缺口**:
 | 缺口 | 现象 | 收紧办法 |
 |---|---|---|
-| dnsfwd 不能答时不装 DNS 劫持 | DNS 回落 Windows 解析器(DNS 泄露,但 TCP 仍不通) | DNS REDIRECT 也无条件装(DNS 一并不通) |
-| 登录前的非交互会话 | 规则未装 → 裸连 | 需开机即装规则(但 §11 的教训:不能开守护进程) |
-| UDP 非 53(QUIC 等)、ICMP | 裸连 | `OUTPUT` 对非私网 UDP/ICMP 加 REJECT |
+| 登录前的非交互会话 | 杀开关/规则未装 → 裸连 | 开机即装(`wsl.conf` `[boot] command=`,一次性 iptables 命令,非守护进程;未启用) |
+| Windows 侧程序(`curl.exe`/`chrome.exe`/`ffmpeg.exe` 等从 WSL 调起) | 走 Windows 网络,不经 WSL iptables | 为其设 `HTTPS_PROXY=http://<WSL_IP>:7893`,或 Windows Clash 开 TUN/系统代理 |
 | `WSL_PROXY=off` / `proxy-down.sh` | 主动裸连 | 显式开关,保留 |

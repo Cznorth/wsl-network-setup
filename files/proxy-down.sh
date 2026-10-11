@@ -16,6 +16,14 @@ while "$IPT" -t nat -C OUTPUT -p tcp -j WSLPROXY 2>/dev/null; do
 done
 "$IPT" -t nat -F WSLPROXY 2>/dev/null
 "$IPT" -t nat -X WSLPROXY 2>/dev/null
+# 杀开关:显式裸连时一并拆除(proxy-up 会重装)
+IPT6=/usr/sbin/ip6tables
+while "$IPT" -C OUTPUT -j WSLKILL 2>/dev/null; do "$IPT" -D OUTPUT -j WSLKILL; done
+"$IPT" -F WSLKILL 2>/dev/null; "$IPT" -X WSLKILL 2>/dev/null
+if [ -x "$IPT6" ]; then
+    while "$IPT6" -C OUTPUT -j WSLKILL 2>/dev/null; do "$IPT6" -D OUTPUT -j WSLKILL; done
+    "$IPT6" -F WSLKILL 2>/dev/null; "$IPT6" -X WSLKILL 2>/dev/null
+fi
 
 kill "$(cat /run/wslproxy-dnsfwd.pid 2>/dev/null)" 2>/dev/null
 kill "$(cat /run/wslproxy-gost.pid 2>/dev/null)" 2>/dev/null

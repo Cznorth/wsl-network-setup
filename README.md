@@ -5,7 +5,7 @@ WSL2 里让**所有出口**(含 DNS、非交互 shell、不读环境变量的程
 - `iptables nat REDIRECT`(不动路由表,开机零守护进程,冷启动零风险)
 - `redsocks`(TCP)+ `dnsfwd.py`(DNS,真实 IP 解析,无泄露)→ 本地 `gost` 链式(→ Clash → 住宅)
 - `gost-winproxy`(systemd,给 Windows 提供 HTTP / SOCKS5 长期端口,端口可配:`WIN_HTTP_PORT` 默认 7893、`WIN_SOCKS_PORT` 默认 7894)
-- **不降级(fail-closed)**:链路任一跳不通时 TCP 规则照装,外网直接不通,绝不静默落回直连;要裸连只能显式 `WSL_PROXY=off` / `proxy-down.sh`
+- **不降级(fail-closed)**:链路任一跳不通时 TCP 规则照装,外网直接不通,绝不静默落回直连;并带 filter 出站杀开关(非代理的 UDP/ICMP/IPv6 一律拒绝,不泄露真实 IP);要裸连只能显式 `WSL_PROXY=off` / `proxy-down.sh`
 
 ## 安装
 

@@ -11,7 +11,7 @@
 # 关键教训:住宅对国内来源是"TCP 假活"——端口能连,SOCKS5 一发 greeting 就被断。
 # 所以探活必须"真 SOCKS5 握手 + 经 Clash CONNECT 到住宅"。
 #
-# 策略 **不降级(fail-closed)**:链路不通就老实不通,绝不静默落回直连。
+# 策略 **不降级(fail-closed)**+ 出站杀开关(§0):链路不通就老实不通,绝不静默落回直连。
 #   * TCP REDIRECT **无条件安装**——链路死则连接失败,而不是从本地出口出去
 #   * DNS 劫持仅在 dnsfwd 真能答时装(dnsfwd 上游=本地链式,答不出=链路真死)
 #   * 要裸连只能显式:WSL_PROXY=off 或 proxy-down.sh
@@ -32,6 +32,35 @@ DNSFWD_PIDFILE=/run/wslproxy-dnsfwd.pid
 LOG=/tmp/wslproxy-up.log
 
 log(){ echo "[$(date '+%F %T')] $*" >>"$LOG"; }
+
+# ---------- 0) 出站杀开关(filter 表):其余一律拒绝,宁可断联不泄露 ----------
+# 合法出站只有 回环/私网(含 Clash 网关)。非 53 的 UDP、ICMP、IPv6、直连住宅的 TCP
+# 全部 REJECT。TCP 与 DNS 的 nat REDIRECT 发生在 filter 之前,目的地已是 127.0.0.1,不受影响。
+# 放在脚本最前:缩短"规则未装"的窗口。proxy-down.sh / WSL_PROXY=off 才会拆除。
+IPT6=/usr/sbin/ip6tables
+killswitch_up(){
+    "$IPT" -N WSLKILL 2>/dev/null || "$IPT" -F WSLKILL
+    "$IPT" -A WSLKILL -o lo -j ACCEPT
+    local net
+    for net in 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 224.0.0.0/4; do
+        "$IPT" -A WSLKILL -d "$net" -j ACCEPT
+    done
+    "$IPT" -A WSLKILL -p tcp -j REJECT --reject-with tcp-reset
+    "$IPT" -A WSLKILL -j REJECT
+    "$IPT" -C OUTPUT -j WSLKILL 2>/dev/null || "$IPT" -I OUTPUT 1 -j WSLKILL
+    if [ -x "$IPT6" ]; then
+        "$IPT6" -N WSLKILL 2>/dev/null || "$IPT6" -F WSLKILL
+        "$IPT6" -A WSLKILL -o lo -j ACCEPT
+        for net in ::1/128 fe80::/10 fc00::/7 ff00::/8; do
+            "$IPT6" -A WSLKILL -d "$net" -j ACCEPT
+        done
+        "$IPT6" -A WSLKILL -p tcp -j REJECT --reject-with tcp-reset
+        "$IPT6" -A WSLKILL -j REJECT
+        "$IPT6" -C OUTPUT -j WSLKILL 2>/dev/null || "$IPT6" -I OUTPUT 1 -j WSLKILL
+    fi
+}
+killswitch_up
+log "killswitch installed (filter OUTPUT -> WSLKILL, v4+v6)"
 
 # 按 KEY=VALUE 取值,不 source(防止密码里的特殊字符被 shell 解释)
 envget(){ grep -s "^$1=" "$GOSTENV" | tail -n1 | cut -d= -f2-; }
@@ -154,12 +183,9 @@ for net in "${EXCL[@]}"; do
     add_rule WSLPROXY -d "$net" -j RETURN
 done
 add_rule WSLPROXY -p tcp -j REDIRECT --to-ports "$TCP_PORT"
-if [ "$DNS_OK" = 1 ]; then
-    add_rule "${DNS_UDP[@]}"; add_rule "${DNS_TCP[@]}"
-else
-    del_rule "${DNS_UDP[@]}"; del_rule "${DNS_TCP[@]}"
-    log "dnsfwd 未就绪,DNS 不劫持"
-fi
+# DNS 劫持无条件安装:dnsfwd 答不出 = DNS 不通,不回落 Windows 解析器
+add_rule "${DNS_UDP[@]}"; add_rule "${DNS_TCP[@]}"
+[ "$DNS_OK" = 1 ] || log "dnsfwd 未就绪 -> DNS 劫持照装(fail-closed,DNS 将不通)"
 add_rule OUTPUT -p tcp -j WSLPROXY
 [ "$CHAIN_OK" = 1 ] || log "chain unhealthy -> 照样装规则(fail-closed,不降级直连)"
 log "rules installed (dns_ok=$DNS_OK)"
