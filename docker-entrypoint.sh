@@ -32,12 +32,22 @@ clean /usr/local/bin/proxy-up.sh --boot
 # 给宿主暴露的 HTTP/SOCKS5 端口:转进同一条本地链(127.0.0.1:12346),出口一致
 clean /usr/local/bin/gost -L=http://:7893 -L=socks5://:7894 -F=socks5://127.0.0.1:12346 &
 winproxy_pid=$!
+# 可选:Claude Code Web(/root/claudecode-web 存在才启动,监听 8787,宿主经 WEB_PORT 访问)
+CCWEB=/root/claudecode-web/app.py
+ccweb_up() {
+  [ -f "$CCWEB" ] || return 0
+  pgrep -f "python3 $CCWEB" >/dev/null && return 0
+  PATH=/root/.local/bin:/root/.npm-global/bin:$PATH LANG=C.UTF-8 \
+    clean python3 "$CCWEB" --host 0.0.0.0 --port 8787 >>/root/.claudecode-web.log 2>&1 &
+}
+ccweb_up
 trap 'kill "$winproxy_pid" 2>/dev/null; exit 0' INT TERM
 
 # 守护:链/dnsfwd/redsocks 任何一个掉了就重跑 proxy-up.sh(它幂等,只补缺的)
 while kill -0 "$winproxy_pid" 2>/dev/null; do
   sleep 15 &
   wait $! || true
+  ccweb_up
   if ! pgrep -f '^/usr/local/bin/gost -L=socks5://127\.0\.0\.1:12346 ' >/dev/null ||
      ! pgrep -f '^python3 /usr/local/bin/dnsfwd\.py' >/dev/null ||
      ! pgrep -x redsocks >/dev/null; then

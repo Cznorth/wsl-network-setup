@@ -43,6 +43,8 @@ services:
       # only when other machines need to use this proxy.
       - "${PROXY_BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-7893}:7893"
       - "${PROXY_BIND_ADDRESS:-127.0.0.1}:${SOCKS_PORT:-7894}:7894"
+      # Claude Code Web (only if installed in /root/claudecode-web); localhost only.
+      - "127.0.0.1:${WEB_PORT:-8788}:8787"
     volumes:
       # Compose prefixes this volume with the project name: each instance
       # retains its own home, login state and user-installed tools.
