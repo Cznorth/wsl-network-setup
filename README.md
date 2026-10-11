@@ -39,7 +39,7 @@ WSL2 里让**所有出口**(含 DNS、非交互 shell、不读环境变量的程
 | 方案 | 安装 | 访问 |
 |---|---|---|
 | 一:WSL | `./setup.sh --web <SRC>`(或 `<SRC>/scripts/install-service.sh`),装成 systemd 用户服务,开机经 linger 自启 | `http://localhost:8787/?token=<令牌>` |
-| 二:远程 SSH | 先 `ssh` 到服务器,再 `tar -C <SRC> --exclude=.git --exclude=__pycache__ -cf - . \| docker exec -i <容器> sh -c 'mkdir -p /root/claudecode-web && tar -x -C /root/claudecode-web'`;容器入口脚本发现 `/root/claudecode-web/app.py` 即自动启动并由看门狗守护;容器内先 `claude` 登录 | 本机 `ssh -L 8788:127.0.0.1:8788 root@<服务器>`,浏览器开 `http://localhost:8788/?token=<令牌>` |
+| 二:远程 SSH | 部署时加 `./deploy-server.sh --host … --name … --with-web <SRC>`(可与 `--with-claude` 同用):自动把源码拷进容器 `/root/claudecode-web`、令牌与本机 `~/.claudecode-web` 一致;容器入口脚本发现 `app.py` 即自动启动并由看门狗守护。不带 `--with-claude` 时需在容器内自行 `claude` 登录。已部署的服务器重跑同一命令即可(幂等) | 本机 `ssh -L 8788:127.0.0.1:8788 root@<服务器>`,浏览器开 `http://localhost:8788/?token=<令牌>` |
 | 三:本地 Docker | 在 PowerShell 里:`tar -C <SRC的Windows路径> --exclude=.git --exclude=__pycache__ -cf - . \| docker exec -i <容器> sh -c "mkdir -p /root/claudecode-web && tar -x -C /root/claudecode-web"`;存在即自启,看门狗守护;容器内先 `claude` 登录 | `http://localhost:8788/?token=<令牌>`(宿主端口 `.env` 的 `WEB_PORT`,默认 8788) |
 
 - 容器方案的 `/root` 是命名卷,`claudecode-web` 目录、令牌和登录态在重建容器后保留;`down -v` 会清掉。

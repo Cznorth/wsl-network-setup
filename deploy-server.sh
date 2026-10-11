@@ -17,6 +17,8 @@
 #   --win-user U         Windows 用户名(默认自动检测)
 #   --with-claude        在容器里装 Claude Code,复用本机 ~/.claude 的登录态与全局 CLAUDE.md(登录态会传到服务器)
 #   --with-pi            在容器里装 pi,复用 Windows 的 .pi/agent(含 API Key,会传到服务器)
+#   --with-web DIR       把 claudecode-web 源码(DIR,含 app.py)拷进容器 /root/claudecode-web 并随容器自启(端口见下),
+#                        同时复用本机 ~/.claudecode-web 的令牌;访问: ssh -L 8788:127.0.0.1:8788 后开 http://localhost:8788/?token=...
 #   --via-wsl            备选:Windows 侧 ssh 经 WSL 的 nc 出去(直连 22 被手机网络间歇重置时用)
 #   --no-windows         只部署服务器,跳过 Windows 侧(隧道密钥/计划任务/rewsl)
 #
@@ -28,7 +30,7 @@
 set -u
 SRC="$(cd "$(dirname "$0")" && pwd)"
 HOST=; SSHU=root; SSHP=22; NAME=srv; DEFAULT=0; VIAWSL=0; CONF="$SRC/wslproxy.env"; WORKSPACE=/srv/work
-DRIVES=; WINUSER=; CLAUDE=0; PI=0; DOWIN=1
+DRIVES=; WINUSER=; CLAUDE=0; PI=0; DOWIN=1; WEBSRC=
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -38,6 +40,7 @@ while [ $# -gt 0 ]; do
         --workspace) WORKSPACE=$2; shift ;; --drives) DRIVES=$2; shift ;;
         --win-user) WINUSER=$2; shift ;; --with-claude) CLAUDE=1 ;;
         --via-wsl) VIAWSL=1 ;;
+        --with-web) WEBSRC=$2; shift ;;
         --with-pi) PI=1 ;;              --no-windows) DOWIN=0 ;;
         -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
         *) echo "未知参数: $1(-h 查看帮助)"; exit 1 ;;
@@ -52,6 +55,7 @@ warn(){ printf '  %s[!!]%s %s\n' "$Y" "$N" "$*"; }
 die(){  printf '  %s[XX]%s %s\n' "$R" "$N" "$*"; exit 1; }
 
 [ -n "$HOST" ] || die "缺少 --host"
+[ -z "$WEBSRC" ] || [ -f "$WEBSRC/app.py" ] || die "--with-web: $WEBSRC/app.py 不存在"
 case "$NAME" in *[!A-Za-z0-9_-]*|'') die "--name 只能含字母数字 _ -" ;; esac
 grep -qi microsoft /proc/version 2>/dev/null || die "请在 WSL 里运行"
 SSHO=(-p "$SSHP" -o ConnectTimeout=15 -o ServerAliveInterval=15 -o StrictHostKeyChecking=accept-new -o ControlMaster=no -o ControlPath=none)
@@ -253,6 +257,34 @@ PYEOF
             warn "没找到 $PD,跳过 pi 配置复用"
         fi
     fi
+fi
+
+# ---- 7b. claudecode-web ----
+if [ -n "$WEBSRC" ]; then
+    step "7b. claudecode-web"
+    tar -C "$WEBSRC" --exclude=.git --exclude=__pycache__ -cf - . \
+        | cput sh -c "'mkdir -p /root/claudecode-web && tar -x -C /root/claudecode-web'" || die "拷贝 claudecode-web 失败"
+    # 入口脚本的看门狗每 15s 检查一次,存在 app.py 即拉起;等它第一次生成 config.json
+    for _ in $(seq 1 12); do
+        rsh "docker exec $CN test -f /root/.claudecode-web/config.json" 2>/dev/null && break; sleep 5
+    done
+    TOK=$(python3 -c 'import json,os,sys;print(json.load(open(os.path.expanduser("~/.claudecode-web/config.json"))).get("token",""))' 2>/dev/null)
+    if [ -n "$TOK" ]; then
+        { printf 'TOK=%s\n' "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$TOK")"
+          cat <<'PYEOF'
+import json
+p = "/root/.claudecode-web/config.json"
+d = json.load(open(p)); d["token"] = TOK
+json.dump(d, open(p, "w"), indent=2)
+PYEOF
+        } | cput python3 - || die "写入令牌失败"
+        rsh "docker exec $CN pkill -f /root/claudecode-web/app.py" 2>/dev/null   # 看门狗自动重启,令牌生效
+        ok "claudecode-web 已安装,令牌与本机一致(容器内 :8787 → 服务器 127.0.0.1:8788)"
+    else
+        warn "claudecode-web 已安装,但没读到本机令牌;令牌见容器内 /root/.claudecode-web/config.json"
+    fi
+    ok "访问: ssh -L 8788:127.0.0.1:8788 -p $SSHP $SSHU@$HOST ,然后开 http://localhost:8788/?token=<令牌>"
+    warn "容器内还需运行 claude 登录(或加 --with-claude 复用登录态)"
 fi
 
 # ---- 8. 验收 ----
