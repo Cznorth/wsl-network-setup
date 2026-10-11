@@ -17,6 +17,7 @@
 #   --win-user U         Windows 用户名(默认自动检测)
 #   --with-claude        在容器里装 Claude Code,复用本机 ~/.claude 的登录态与全局 CLAUDE.md(登录态会传到服务器)
 #   --with-pi            在容器里装 pi,复用 Windows 的 .pi/agent(含 API Key,会传到服务器)
+#   --via-wsl            备选:Windows 侧 ssh 经 WSL 的 nc 出去(直连 22 被手机网络间歇重置时用)
 #   --no-windows         只部署服务器,跳过 Windows 侧(隧道密钥/计划任务/rewsl)
 #
 # 全部幂等,可重复运行。秘密不落盘到仓库:
@@ -26,7 +27,7 @@
 # =============================================================================
 set -u
 SRC="$(cd "$(dirname "$0")" && pwd)"
-HOST=; SSHU=root; SSHP=22; NAME=srv; DEFAULT=0; CONF="$SRC/wslproxy.env"; WORKSPACE=/srv/work
+HOST=; SSHU=root; SSHP=22; NAME=srv; DEFAULT=0; VIAWSL=0; CONF="$SRC/wslproxy.env"; WORKSPACE=/srv/work
 DRIVES=; WINUSER=; CLAUDE=0; PI=0; DOWIN=1
 
 while [ $# -gt 0 ]; do
@@ -36,6 +37,7 @@ while [ $# -gt 0 ]; do
         --default) DEFAULT=1 ;;         -c|--config) CONF=$2; shift ;;
         --workspace) WORKSPACE=$2; shift ;; --drives) DRIVES=$2; shift ;;
         --win-user) WINUSER=$2; shift ;; --with-claude) CLAUDE=1 ;;
+        --via-wsl) VIAWSL=1 ;;
         --with-pi) PI=1 ;;              --no-windows) DOWIN=0 ;;
         -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
         *) echo "未知参数: $1(-h 查看帮助)"; exit 1 ;;
@@ -169,18 +171,27 @@ TUNEOF
     PS -File "$(wslpath -w "$WTMP/wslproxy-install-task.ps1")" -Name "wslproxy-tunnel-$NAME" -Cmd "$(wslpath -w "$TCMD")" | tail -n1 | sed 's/^/  任务状态: /'
 
     mkdir -p "$WINHOME/.local/bin"
+    # mk_rewsl <file> [远端命令后缀];后缀形如 "|claude %*",由 rewsl-enter.sh 解析
+    PXY=; [ $VIAWSL = 1 ] && PXY='-o "ProxyCommand=wsl.exe -e nc %%h %%p" '
     mk_rewsl(){ cat > "$1" <<RWEOF
 @echo off
 rem rewsl: enter the container shell on $NAME ($HOST); cwd on a drive maps to /mnt/<drive>/ (keep this file ASCII-only)
 setlocal
 set "P=%CD:\\=/%"
-ssh -tt -i "%USERPROFILE%\\.ssh\\$KR" -p $SSHP -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 $SSHU@$HOST "%P%"
+set N=0
+:retry
+ssh -tt -i "%USERPROFILE%\\.ssh\\$KR" -p $SSHP -o ConnectTimeout=10 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 $PXY$SSHU@$HOST "%P%$2"
+rem ssh exit 255 = connection failure (link reset/timeout): retry up to 4 times
+if errorlevel 255 if %N% lss 3 (set /a N+=1 & timeout /t 2 /nobreak >nul & goto retry)
 RWEOF
     }
     mk_rewsl "$WINHOME/.local/bin/rewsl-$NAME.cmd"
     if [ $DEFAULT = 1 ] || [ ! -f "$WINHOME/.local/bin/rewsl.cmd" ]; then
         mk_rewsl "$WINHOME/.local/bin/rewsl.cmd"; ok "rewsl.cmd → $NAME"
+        mk_rewsl "$WINHOME/.local/bin/rclaude.cmd" '|claude %*'
     fi
+    # rclaude-NAME: 直接进容器运行官方 claude(交互 TUI),参数透传,如 rclaude-NAME --continue
+    mk_rewsl "$WINHOME/.local/bin/rclaude-$NAME.cmd" '|claude %*'
     PS -Command '$p=[Environment]::GetEnvironmentVariable("Path","User"); $d="$env:USERPROFILE\.local\bin"; if(($p -split ";") -notcontains $d){[Environment]::SetEnvironmentVariable("Path","$p;$d","User"); "  已把 $d 加入用户 PATH(新开终端生效)"}'
 fi
 
@@ -260,6 +271,7 @@ cat <<DONEEOF
 
 完成。使用:
   Windows 终端:    rewsl-$NAME   (在盘符目录下运行会自动进入对应 /mnt/<盘>/ 目录)
+                   rclaude-$NAME  直接在容器里运行官方 claude(参数透传,如 --continue)
   服务器手动进入:  ssh -p $SSHP $SSHU@$HOST; docker exec -it $CN bash
   容器内:          win <cmd>     在 Windows 上执行命令
 DONEEOF
