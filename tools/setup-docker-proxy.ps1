@@ -116,7 +116,7 @@ CLASH_PORT=$ClashPort
 DNS_UPSTREAM=$dnsUpstream
 HTTP_PORT=$httpPort
 SOCKS_PORT=$socksPort
-PROXY_BIND_ADDRESS=127.0.0.1
+PROXY_BIND_ADDRESS=0.0.0.0
 "@ | Set-Content -Encoding ascii -NoNewline -LiteralPath $instanceEnv
 
 $wslEnvPath = "/home/cznorth/wsl-network-setup/docker-proxies/$Name/.env"

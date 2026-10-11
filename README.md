@@ -30,7 +30,7 @@ WSL2 里让**所有出口**(含 DNS、非交互 shell、不读环境变量的程
 - 想要与 WSL 隔离的可丢弃环境,或同时用多个出口(`-Name proxy2`):方案三。
 - 三者互不冲突:方案一占用 WSL 的 7893/7894,方案三容器暴露 7895/7896(多实例自动分配),方案二的反向隧道只占服务器本机 `127.0.0.1:2222`。
 
-各方案细节见下文:[安装](#安装方案一wsl)(方案一)、[服务器部署](#服务器部署方案二远程-ssh)(方案二)、[Docker 单容器代理](#docker-单容器代理方案三本地-docker)(方案三)。三种方案里的 Claude Code 登录态相互独立,各自登录;容器内放入 `/root/claudecode-web` 后可随容器自启 Claude Code Web(宿主默认端口 8788)。
+各方案细节见下文:[安装](#安装方案一wsl)(方案一)、[服务器部署](#服务器部署方案二远程-ssh)(方案二)、[Docker 单容器代理](#docker-单容器代理方案三本地-docker)(方案三)。三种方案里的 Claude Code 登录态相互独立,各自登录;容器内放入 `/home/user/claudecode-web` 后可随容器自启 Claude Code Web(宿主默认端口 8788)。
 
 ### 三种方案都要装 claudecode-app(Claude Code Web)
 
@@ -39,10 +39,10 @@ WSL2 里让**所有出口**(含 DNS、非交互 shell、不读环境变量的程
 | 方案 | 安装 | 访问 |
 |---|---|---|
 | 一:WSL | `./setup.sh --web <SRC>`(或 `<SRC>/scripts/install-service.sh`),装成 systemd 用户服务,开机经 linger 自启 | `http://localhost:8787/?token=<令牌>` |
-| 二:远程 SSH | 部署时加 `./deploy-server.sh --host … --name … --with-web <SRC>`(可与 `--with-claude` 同用):自动把源码拷进容器 `/root/claudecode-web`、令牌与本机 `~/.claudecode-web` 一致;容器入口脚本发现 `app.py` 即自动启动并由看门狗守护。不带 `--with-claude` 时需在容器内自行 `claude` 登录。已部署的服务器重跑同一命令即可(幂等) | 本机 `ssh -L 8788:127.0.0.1:8788 root@<服务器>`,浏览器开 `http://localhost:8788/?token=<令牌>` |
-| 三:本地 Docker | 在 PowerShell 里:`tar -C <SRC的Windows路径> --exclude=.git --exclude=__pycache__ -cf - . \| docker exec -i <容器> sh -c "mkdir -p /root/claudecode-web && tar -x -C /root/claudecode-web"`;存在即自启,看门狗守护;容器内先 `claude` 登录 | `http://localhost:8788/?token=<令牌>`(宿主端口 `.env` 的 `WEB_PORT`,默认 8788) |
+| 二:远程 SSH | 部署时加 `./deploy-server.sh --host … --name … --with-web <SRC>`(可与 `--with-claude` 同用):自动把源码拷进容器 `/home/user/claudecode-web`、令牌与本机 `~/.claudecode-web` 一致;容器入口脚本发现 `app.py` 即自动启动并由看门狗守护。不带 `--with-claude` 时需在容器内自行 `claude` 登录。已部署的服务器重跑同一命令即可(幂等) | 本机 `ssh -L 8788:127.0.0.1:8788 root@<服务器>`,浏览器开 `http://localhost:8788/?token=<令牌>` |
+| 三:本地 Docker | 在 PowerShell 里:`tar -C <SRC的Windows路径> --exclude=.git --exclude=__pycache__ -cf - . \| docker exec -i <容器> sh -c "mkdir -p /home/user/claudecode-web && tar -x -C /home/user/claudecode-web"`;存在即自启,看门狗守护;容器内先 `claude` 登录 | `http://localhost:8788/?token=<令牌>`(宿主端口 `.env` 的 `WEB_PORT`,默认 8788) |
 
-- 容器方案的 `/root` 是命名卷,`claudecode-web` 目录、令牌和登录态在重建容器后保留;`down -v` 会清掉。
+- 容器方案的 `/home/user` 是命名卷,`claudecode-web` 目录、令牌和登录态在重建容器后保留;`down -v` 会清掉。
 - 想让多个实例共用同一令牌,把 `~/.claudecode-web/config.json` 里的 `token` 拷到另一实例同名文件后重启服务。
 - 容器内不做 git 自更新(私有仓库无凭据),更新时重新拷一遍源码。
 
@@ -53,7 +53,7 @@ WSL2 里让**所有出口**(含 DNS、非交互 shell、不读环境变量的程
 | 方案 | HTTP | SOCKS5 | 备注 |
 |---|---|---|---|
 | 一:WSL(`gost-winproxy`) | `127.0.0.1:7893` | `127.0.0.1:7894` | `wslproxy.env` 里 `WIN_HTTP_PORT` / `WIN_SOCKS_PORT` 可改;`install.sh --no-winproxy` 会关闭 |
-| 三:本地 Docker 默认实例 | `127.0.0.1:7895` | `127.0.0.1:7896` | `.env` 里 `HTTP_PORT` / `SOCKS_PORT` 可改;只绑本机,要给局域网用才改 `PROXY_BIND_ADDRESS` |
+| 三:本地 Docker 默认实例 | `<宿主机局域网IP>:7895` | `<宿主机局域网IP>:7896` | 默认监听局域网;`.env` 里 `HTTP_PORT` / `SOCKS_PORT` / `PROXY_BIND_ADDRESS` 可改 |
 | 三:`setup-docker-proxy.ps1` 的第 N 个实例 | 7897、7899… | 7898、7900… | 脚本自动分配并检查占用,端口记录在 `docker-proxies\` |
 
 验证:`curl.exe -x socks5h://127.0.0.1:7894 https://api.ipify.org`(换成对应端口),返回的应是住宅 IP。浏览器里建议用 `socks5h`(或指纹浏览器的 SOCKS5 选项),让 DNS 也走代理,避免本机解析泄露。
@@ -89,11 +89,15 @@ docker compose exec residential-proxy curl -fsS https://api.ipify.org
 
 Docker 构建默认使用 DaoCloud 的 Ubuntu 镜像、阿里云 Ubuntu APT 镜像和 GitHub Release 国内加速地址；Release 加速失败时会自动回退到 GitHub 官方地址。要切回官方 Ubuntu 基础镜像，可在 `.env` 中设置 `UBUNTU_IMAGE=ubuntu:24.04`。Ubuntu 24.04 使用 `ubuntu.sources` 配置 APT 源，镜像地址会在构建时自动替换。[阿里云 Ubuntu 镜像说明](https://developer.aliyun.com/mirror/ubuntu/)
 
-默认只绑定本机 `127.0.0.1`。需要让局域网其他设备使用时，把 `.env` 中的 `PROXY_BIND_ADDRESS` 改为 `0.0.0.0`，并自行配置防火墙。若住宅端点允许直连，可把 `USE_CLASH=0`；如果住宅只接受国外来源，保持 `USE_CLASH=1` 并确保 Windows Clash 开启 Allow LAN。
+默认绑定 `0.0.0.0`，局域网设备可通过宿主机的局域网 IP 访问 `HTTP_PORT` / `SOCKS_PORT`（默认 `7895` / `7896`）。请在 Windows 防火墙中只允许可信局域网网段；若只需本机访问，把 `.env` 中的 `PROXY_BIND_ADDRESS` 改为 `127.0.0.1`。若住宅端点允许直连，可把 `USE_CLASH=0`；如果住宅只接受国外来源，保持 `USE_CLASH=1` 并确保 Windows Clash 开启 Allow LAN。
 
 停止容器：`docker compose down`。
 
-每个 Compose 项目都有独立的 `home` 命名卷，挂载到 `/root`。重启、`down` 后重新启动、重建容器均保留该目录，包括 shell 配置、SSH 密钥、用户目录下的工具和登录配置；不同实例互不共享登录状态。不要用 `docker compose down -v` 删除需要保留的卷。C、D 盘中的文件继续保存在 Windows。
+默认以普通账户运行（UID/GID 为 `1000:1000`），每个实例首次启动时随机生成 `user_<12位十六进制>` 用户名，保存在 home 卷的 `.wslproxy-user` 中，重启和重建后保持不变。容器系统时区固定为新加坡时区 `Asia/Singapore`。`docker exec`、`docker compose exec`、`bash1` 和 `rewsl` 默认使用该账户，管理操作用免密 `sudo`。代理初始化及守护仍由 root 运行，Claude Code Web 以普通账户运行。
+
+从旧版升级时运行 `docker compose up -d --build`（多实例需使用对应的项目名和 env 文件）；现有 `home` 卷自动改挂到 `/home/user`，首次启动会修复文件所有者、旧 Node 符号链接及 shell/npm 配置中的 `/root/` 路径，保留工具和登录态。手动配置的其他绝对路径需自行调整。不要删除旧卷。
+
+每个 Compose 项目都有独立的 `home` 命名卷，挂载到 `/home/user`。重启、`down` 后重新启动、重建容器均保留该目录，包括 shell 配置、SSH 密钥、用户目录下的工具和登录配置；不同实例互不共享登录状态。不要用 `docker compose down -v` 删除需要保留的卷。C、D 盘中的文件继续保存在 Windows。
 
 为了让 Claude Code 程序本身也跨重建保留，在容器内使用官方原生安装方式（安装到用户目录）：
 
@@ -102,7 +106,7 @@ curl -fsSL https://claude.ai/install.sh | bash
 claude
 ```
 
-持久化不保证认证永不过期。`apt install` 或默认全局 npm 安装写到 `/usr` 等系统目录的内容不在 home 卷中，重建时需重新安装或加入 Dockerfile；用户工具建议安装到 `/root/.local`、`/root/.npm-global` 或使用 home 下的 nvm。
+持久化不保证认证永不过期。`sudo apt install` 或默认全局 npm 安装写到 `/usr` 等系统目录的内容不在 home 卷中，重建时需重新安装或加入 Dockerfile；用户工具建议安装到 `/home/user/.local`、`/home/user/.npm-global` 或使用 home 下的 nvm。
 
 容器基于 Ubuntu 24.04，并预装 `git`、`curl`、`iproute2`、`iptables`、DNS 工具、`ping` 和常用编辑器。它同时挂载 Windows 的整个 `C:`、`D:` 盘，容器内路径与 WSL 一致：`/mnt/c`、`/mnt/d`。快速进入 Bash：
 

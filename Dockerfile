@@ -40,10 +40,28 @@ RUN case "${TARGETARCH:-amd64}" in \
     && install -m 0755 /tmp/gost /usr/local/bin/gost \
     && rm -rf /tmp/gost /tmp/gost.tgz
 
+ENV TZ=Asia/Singapore
+RUN ln -snf /usr/share/zoneinfo/Asia/Singapore /etc/localtime \
+    && echo Asia/Singapore > /etc/timezone
+
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY files/proxy-up.sh files/proxy-down.sh files/dnsfwd.py files/win /usr/local/bin/
 COPY files/redsocks.conf /etc/redsocks.conf
 RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh /usr/local/bin/proxy-up.sh /usr/local/bin/proxy-down.sh /usr/local/bin/win
 
+# Use a stable UID/home; the entrypoint assigns a persistent random login name
+# per home volume. Numeric USER also makes docker exec use that account.
+RUN usermod -d /home/user -aG sudo ubuntu \
+    && install -d -m 0700 -o 1000 -g 1000 /home/user \
+    && cp -a /etc/skel/. /home/user/ \
+    && chown -R 1000:1000 /home/user \
+    && printf '%s\n' '%sudo ALL=(ALL:ALL) NOPASSWD: ALL' '#1000 ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/container-user \
+    && chmod 0440 /etc/sudoers.d/container-user \
+    && visudo -cf /etc/sudoers.d/container-user
+
+ENV HOME=/home/user
+ENV PATH=/home/user/.local/bin:/home/user/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+USER 1000:1000
+WORKDIR /home/user
 EXPOSE 7893 7894
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

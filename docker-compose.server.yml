@@ -19,7 +19,8 @@ services:
     tty: true
     working_dir: /work
     environment:
-      PATH: /root/.local/bin:/root/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      PATH: /home/user/.local/bin:/home/user/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      TZ: Asia/Singapore
       RES_HOST: "${RES_HOST:?RES_HOST is required}"
       RES_PORT: "${RES_PORT:-443}"
       RES_USER: "${RES_USER:?RES_USER is required}"
@@ -44,14 +45,14 @@ services:
       # 只绑本机回环,远程用 SSH 隧道访问
       - "127.0.0.1:${HTTP_PORT:-7893}:7893"
       - "127.0.0.1:${SOCKS_PORT:-7894}:7894"
-      # Claude Code Web(/root/claudecode-web 存在才会被入口脚本拉起),远程用 SSH 隧道访问
+      # Claude Code Web(/home/user/claudecode-web 存在才会被入口脚本拉起),远程用 SSH 隧道访问
       - "127.0.0.1:${WEB_PORT:-8788}:8787"
     networks:
       - default
     volumes:
       - type: volume
         source: home
-        target: /root
+        target: /home/user
       # Windows 盘的 bind(/mnt/win/<盘> -> /mnt/<盘>,rslave)由 deploy-server.sh 生成到 compose.drives.yml,
       # 经 .env 的 COMPOSE_FILE 自动合并。
       # `win` 用的 Windows 登录密钥(只读)

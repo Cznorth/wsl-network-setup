@@ -4,7 +4,7 @@
 HOST=${WIN_SSH_HOST:-192.168.64.1}
 PORT=${WIN_SSH_PORT:-2222}
 USER_=${WIN_SSH_USER:-}
-KEY=${WIN_SSH_KEY:-/etc/wslproxy/winssh}
+KEY=${WIN_SSH_KEY:-$HOME/.ssh/winssh}
 
 [ -n "$USER_" ] || { echo "win: 未设置 WIN_SSH_USER(Windows 用户名)" >&2; exit 1; }
 [ -r "$KEY" ] || { echo "win: 缺少密钥 $KEY" >&2; exit 1; }
@@ -28,5 +28,5 @@ else
   cmd="$pre$*"; tty=
 fi
 exec ssh $tty -i "$KEY" -p "$PORT" -o IdentitiesOnly=yes -o BatchMode=yes \
-  -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/root/.ssh/known_hosts_win \
+  -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$HOME/.ssh/known_hosts_win" \
   -o ServerAliveInterval=30 "$USER_@$HOST" $cmd

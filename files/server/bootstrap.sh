@@ -48,6 +48,8 @@ prep)
         done
     } > $D/compose.drives.yml
     mkdir -p "$WORKSPACE"
+    # Allow the container's ordinary UID to create projects; retain file owners.
+    [ "$(stat -c %u "$WORKSPACE")" != 0 ] || chown 1000:1000 "$WORKSPACE"
     { grep -Ev '^(WORKSPACE|WIN_USER|COMPOSE_FILE)=' $D/.env 2>/dev/null || true
       echo "WORKSPACE=$WORKSPACE"; echo "WIN_USER=$WIN_USER"
       echo "COMPOSE_FILE=docker-compose.server.yml:compose.drives.yml"; } > $D/.env.new

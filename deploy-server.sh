@@ -17,7 +17,7 @@
 #   --win-user U         Windows 用户名(默认自动检测)
 #   --with-claude        在容器里装 Claude Code,复用本机 ~/.claude 的登录态与全局 CLAUDE.md(登录态会传到服务器)
 #   --with-pi            在容器里装 pi,复用 Windows 的 .pi/agent(含 API Key,会传到服务器)
-#   --with-web DIR       把 claudecode-web 源码(DIR,含 app.py)拷进容器 /root/claudecode-web 并随容器自启(端口见下),
+#   --with-web DIR       把 claudecode-web 源码(DIR,含 app.py)拷进容器 /home/user/claudecode-web 并随容器自启(端口见下),
 #                        同时复用本机 ~/.claudecode-web 的令牌;访问: ssh -L 8788:127.0.0.1:8788 后开 http://localhost:8788/?token=...
 #   --via-wsl            备选:Windows 侧 ssh 经 WSL 的 nc 出去(直连 22 被手机网络间歇重置时用)
 #   --no-windows         只部署服务器,跳过 Windows 侧(隧道密钥/计划任务/rewsl)
@@ -215,8 +215,8 @@ if [ $CLAUDE = 1 ] || [ $PI = 1 ]; then
     if [ $CLAUDE = 1 ]; then
         CRED="$HOME/.claude/.credentials.json"
         if [ -f "$CRED" ]; then
-            cput bash -c "'umask 077; mkdir -p /root/.claude; cat > /root/.claude/.credentials.json'" < "$CRED"
-            printf '{"hasCompletedOnboarding":true,"theme":"dark"}\n' | cput bash -c "'cat > /root/.claude.json'"
+            cput bash -c "'umask 077; mkdir -p /home/user/.claude; cat > /home/user/.claude/.credentials.json'" < "$CRED"
+            printf '{"hasCompletedOnboarding":true,"theme":"dark"}\n' | cput bash -c "'cat > /home/user/.claude.json'"
             ok "Claude Code 已安装并复用登录态"
         else
             warn "没找到 $CRED,请在容器里运行 claude 后 /login"
@@ -230,8 +230,8 @@ if [ $CLAUDE = 1 ] || [ $PI = 1 ]; then
                 printf '(如 `win ffmpeg`),路径用 Windows 路径(`/mnt/d/x` 对应 `D:\\x`);WSL/sudo/Linux 安装限制等条目不适用本容器。\n\n'
                 cat "$HOME/.claude/CLAUDE.md"
             fi
-        } | cput bash -c "'mkdir -p /root/.claude; cat > /root/.claude/CLAUDE.md'"
-        ok "已写入 /root/.claude/CLAUDE.md(环境说明 + 本机全局指令)"
+        } | cput bash -c "'mkdir -p /home/user/.claude; cat > /home/user/.claude/CLAUDE.md'"
+        ok "已写入 /home/user/.claude/CLAUDE.md(环境说明 + 本机全局指令)"
     fi
     if [ $PI = 1 ]; then
         PD="$WINHOME/.pi/agent"
@@ -250,7 +250,7 @@ def strip(o):
     elif isinstance(o, list): [strip(v) for v in o]
 strip(d); json.dump(d, open(p, 'w'), ensure_ascii=False, indent=2)
 PYEOF
-            tar -C "$tmp" -cz agent | cput bash -c "'umask 077; mkdir -p /root/.pi && tar -xz -C /root/.pi'"
+            tar -C "$tmp" -cz agent | cput bash -c "'umask 077; mkdir -p /home/user/.pi && tar -xz -C /home/user/.pi'"
             rm -rf "$tmp"
             ok "pi 已安装并复用 $PD(环境说明已并入 APPEND_SYSTEM.md)"
         else
@@ -263,25 +263,25 @@ fi
 if [ -n "$WEBSRC" ]; then
     step "7b. claudecode-web"
     tar -C "$WEBSRC" --exclude=.git --exclude=__pycache__ -cf - . \
-        | cput sh -c "'mkdir -p /root/claudecode-web && tar -x -C /root/claudecode-web'" || die "拷贝 claudecode-web 失败"
+        | cput sh -c "'mkdir -p /home/user/claudecode-web && tar -x -C /home/user/claudecode-web'" || die "拷贝 claudecode-web 失败"
     # 入口脚本的看门狗每 15s 检查一次,存在 app.py 即拉起;等它第一次生成 config.json
     for _ in $(seq 1 12); do
-        rsh "docker exec $CN test -f /root/.claudecode-web/config.json" 2>/dev/null && break; sleep 5
+        rsh "docker exec $CN test -f /home/user/.claudecode-web/config.json" 2>/dev/null && break; sleep 5
     done
     TOK=$(python3 -c 'import json,os,sys;print(json.load(open(os.path.expanduser("~/.claudecode-web/config.json"))).get("token",""))' 2>/dev/null)
     if [ -n "$TOK" ]; then
         { printf 'TOK=%s\n' "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$TOK")"
           cat <<'PYEOF'
 import json
-p = "/root/.claudecode-web/config.json"
+p = "/home/user/.claudecode-web/config.json"
 d = json.load(open(p)); d["token"] = TOK
 json.dump(d, open(p, "w"), indent=2)
 PYEOF
         } | cput python3 - || die "写入令牌失败"
-        rsh "docker exec $CN pkill -f /root/claudecode-web/app.py" 2>/dev/null   # 看门狗自动重启,令牌生效
+        rsh "docker exec $CN pkill -f /home/user/claudecode-web/app.py" 2>/dev/null   # 看门狗自动重启,令牌生效
         ok "claudecode-web 已安装,令牌与本机一致(容器内 :8787 → 服务器 127.0.0.1:8788)"
     else
-        warn "claudecode-web 已安装,但没读到本机令牌;令牌见容器内 /root/.claudecode-web/config.json"
+        warn "claudecode-web 已安装,但没读到本机令牌;令牌见容器内 /home/user/.claudecode-web/config.json"
     fi
     ok "访问: ssh -L 8788:127.0.0.1:8788 -p $SSHP $SSHU@$HOST ,然后开 http://localhost:8788/?token=<令牌>"
     warn "容器内还需运行 claude 登录(或加 --with-claude 复用登录态)"
