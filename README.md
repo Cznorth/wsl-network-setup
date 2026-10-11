@@ -11,6 +11,8 @@ WSL2 里让**所有出口**(含 DNS、非交互 shell、不读环境变量的程
 
 ```bash
 git clone https://github.com/Cznorth/wsl-network-setup.git && cd wsl-network-setup
+./setup.sh                                                # 新机器一键:检查 systemd/Clash、填配置、装代理+开机单元、注册 Windows 自启、自检(--web DIR 同时装 claudecode-web)
+# 或手动分步:
 cp wslproxy.env.example wslproxy.env && vi wslproxy.env   # 填住宅地址/端口/账号/密码(Windows 端口 WIN_HTTP_PORT/WIN_SOCKS_PORT 可选)
 sudo ./install.sh                                         # --no-winproxy 跳过 Windows 端口
 bash tools/net_check.sh                                   # 先做连通性预检(不通即中止 rc=2),再检测出口 / DNS 泄露 / 纯净度 / 全链路延迟
