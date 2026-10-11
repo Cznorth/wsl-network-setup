@@ -210,7 +210,7 @@ sed -i -e '/^# >>> wsl-network-setup >>>$/,/^# <<< wsl-network-setup <<<$/d' \
        -e '/^# ===== 出口逻辑/,/^# ===== 出口 end =====$/d' "$RC"
 cat >> "$RC" <<'EOF'
 # >>> wsl-network-setup >>>
-# 登录时装 iptables 透明代理(开机零守护进程);WSL_PROXY=off 后新开 shell = 裸连
+# 登录时装 iptables 透明代理(开机零守护进程);WSL_PROXY=off 后新开 shell = 显式裸连
 if [ "${WSL_PROXY:-on}" != "off" ]; then
   sudo -n /usr/local/bin/proxy-up.sh >/dev/null 2>&1
   unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
@@ -264,7 +264,7 @@ if /usr/sbin/iptables -t nat -C OUTPUT -p tcp -j WSLPROXY 2>/dev/null; then
         ok "出口 IP = $ip"
     fi
 else
-    warn "链路不通,已降级裸连(未装任何规则)。排查:"
+    warn "链路不通。不降级:规则已装,外网会连不上(fail-closed)。排查:"
     warn "  1) Windows Clash 是否运行 + Allow LAN($CLASH_GW:${VAL[CLASH_PORT]})"
     warn "  2) 住宅账号/地址是否正确(/etc/gost.env)"
     warn "  3) tail -20 /tmp/wslproxy-up.log"

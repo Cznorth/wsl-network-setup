@@ -9,10 +9,12 @@
 #   住宅只放行国外来源 ─────────────────────────┘    Hop2: 住宅 SOCKS5 → 目标
 #
 # 关键教训:住宅对国内来源是"TCP 假活"——端口能连,SOCKS5 一发 greeting 就被断。
-# 所以探活必须"真 SOCKS5 握手 + 经 Clash CONNECT 到住宅";任何一环不通:
-#   * 不装 DNS 劫持(保 DNS,走 Windows 网关)
-#   * 不装 TCP REDIRECT(保裸连,国内站点可用)
-# 最坏降级为裸连,绝不出现"劫持了 DNS 但上游死"的全断。
+# 所以探活必须"真 SOCKS5 握手 + 经 Clash CONNECT 到住宅"。
+#
+# 策略 **不降级(fail-closed)**:链路不通就老实不通,绝不静默落回直连。
+#   * TCP REDIRECT **无条件安装**——链路死则连接失败,而不是从本地出口出去
+#   * DNS 劫持仅在 dnsfwd 真能答时装(dnsfwd 上游=本地链式,答不出=链路真死)
+#   * 要裸连只能显式:WSL_PROXY=off 或 proxy-down.sh
 #
 # 配置全部在 /etc/gost.env(600,root):RES_HOST RES_PORT RES_USER RES_PASS
 #   [CLASH_PORT=7890] [DNS_UPSTREAM=8.8.8.8:53]
@@ -104,13 +106,13 @@ CHAIN_OK=0
 chain_check && CHAIN_OK=1
 log "chain_check rc=$CHAIN_OK (clash=$CLASH_GW:$CLASH_PORT res=$RES_HOST:$RES_PORT)"
 
-# ---------- 3) dnsfwd:链路健康才起;上游 = 本地链式代理(no-auth) ----------
-if [ "$CHAIN_OK" = 1 ]; then
-    if ! pgrep -f "$DNSFWD_PAT" >/dev/null 2>&1; then
-        setsid nohup python3 /usr/local/bin/dnsfwd.py "$DNS_PORT" "$CHAIN" "" "" "$DNS_UPSTREAM" \
-            >>"$LOG" 2>&1 </dev/null &
-        sleep 0.5
-    fi
+# ---------- 3) dnsfwd:无条件起;上游 = 本地链式代理(no-auth) ----------
+# 不用 CHAIN_OK 做前置条件:链式探活有假阴性(住宅限速会 EOF),
+# dnsfwd 能否真答才是链路健康的有效判据。
+if ! pgrep -f "$DNSFWD_PAT" >/dev/null 2>&1; then
+    setsid nohup python3 /usr/local/bin/dnsfwd.py "$DNS_PORT" "$CHAIN" "" "" "$DNS_UPSTREAM" \
+        >>"$LOG" 2>&1 </dev/null &
+    sleep 0.5
 fi
 pgrep -of "$DNSFWD_PAT" >"$DNSFWD_PIDFILE" 2>/dev/null
 
@@ -130,41 +132,37 @@ except Exception: sys.exit(1)
 PYEOF
 }
 DNS_OK=0
-[ "$CHAIN_OK" = 1 ] && dnsfwd_check && DNS_OK=1
+dnsfwd_check && DNS_OK=1
 log "dnsfwd_check ok=$DNS_OK"
 
 # ---------- 4) redsocks:上游在 /etc/redsocks.conf 固定为本地链式代理 ----------
 pgrep -x redsocks >/dev/null 2>&1 || redsocks -c /etc/redsocks.conf
 
-# ---------- 5) nat 规则:链路健康才装;否则全拆,降级裸连 ----------
+# ---------- 5) nat 规则:无条件安装(fail-closed,不降级) ----------
+# TCP REDIRECT 一定装:链路真死时结果是"连不上",而不是"从本地出口出去"。
+# DNS 劫持只在 dnsfwd 真能答时装;答不出时 DNS 回落 Windows,
+# 此时 TCP 仍被 REDIRECT 到死链路,整体表现就是不通,不会静默换出口。
 add_rule(){ "$IPT" -t nat -C "$@" 2>/dev/null || "$IPT" -t nat -A "$@"; }
 del_rule(){ while "$IPT" -t nat -C "$@" 2>/dev/null; do "$IPT" -t nat -D "$@"; done; }
 DNS_UDP=(OUTPUT -p udp --dport 53 -m comment --comment dns -j REDIRECT --to-ports "$DNS_PORT")
 DNS_TCP=(OUTPUT -p tcp --dport 53 -m comment --comment dns -j REDIRECT --to-ports "$DNS_PORT")
 
-if [ "$CHAIN_OK" = 1 ]; then
-    "$IPT" -t nat -N WSLPROXY 2>/dev/null || "$IPT" -t nat -F WSLPROXY
-    EXCL=(127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 224.0.0.0/4)
-    [[ "$RES_HOST" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && EXCL+=("$RES_HOST/32")
-    for net in "${EXCL[@]}"; do
-        add_rule WSLPROXY -d "$net" -j RETURN
-    done
-    add_rule WSLPROXY -p tcp -j REDIRECT --to-ports "$TCP_PORT"
-    if [ "$DNS_OK" = 1 ]; then
-        add_rule "${DNS_UDP[@]}"; add_rule "${DNS_TCP[@]}"
-    else
-        del_rule "${DNS_UDP[@]}"; del_rule "${DNS_TCP[@]}"
-        log "dnsfwd 未就绪,DNS 不劫持"
-    fi
-    add_rule OUTPUT -p tcp -j WSLPROXY
-    log "rules installed (dns_ok=$DNS_OK)"
+"$IPT" -t nat -N WSLPROXY 2>/dev/null || "$IPT" -t nat -F WSLPROXY
+EXCL=(127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 224.0.0.0/4)
+[[ "$RES_HOST" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && EXCL+=("$RES_HOST/32")
+for net in "${EXCL[@]}"; do
+    add_rule WSLPROXY -d "$net" -j RETURN
+done
+add_rule WSLPROXY -p tcp -j REDIRECT --to-ports "$TCP_PORT"
+if [ "$DNS_OK" = 1 ]; then
+    add_rule "${DNS_UDP[@]}"; add_rule "${DNS_TCP[@]}"
 else
     del_rule "${DNS_UDP[@]}"; del_rule "${DNS_TCP[@]}"
-    del_rule OUTPUT -p tcp -j WSLPROXY
-    "$IPT" -t nat -F WSLPROXY 2>/dev/null
-    "$IPT" -t nat -X WSLPROXY 2>/dev/null
-    log "chain BROKEN -> 拆除全部规则,降级裸连(至少 DNS/国内站可用)"
+    log "dnsfwd 未就绪,DNS 不劫持"
 fi
+add_rule OUTPUT -p tcp -j WSLPROXY
+[ "$CHAIN_OK" = 1 ] || log "chain unhealthy -> 照样装规则(fail-closed,不降级直连)"
+log "rules installed (dns_ok=$DNS_OK)"
 
 # ---------- 6) Windows 侧长期端口(gost-winproxy):同样经 Clash ----------
 # 端口改了也要重启:unit 从 /etc/gost.env 读 WIN_HTTP_PORT/WIN_SOCKS_PORT

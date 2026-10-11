@@ -71,9 +71,9 @@ WSL 全部 TCP + DNS → **iptables nat REDIRECT(不动路由表)** → redsocks
 ## 4. 依赖
 
 - **链路每一跳都要通**(2026-10-05 起):
-  1. **Windows Clash 必须在运行且允许 LAN**(netstat 里 `0.0.0.0:7890`)——第一跳;Clash 没起来 WSL 会自动降级(不装任何规则,裸连),等 Clash 起来后开个新终端即可恢复。
+  1. **Windows Clash 必须在运行且允许 LAN**(netstat 里 `0.0.0.0:7890`)——第一跳;Clash 没起来 = **WSL 外网不通(不降级)**,等 Clash 起来后开个新终端(重跑 proxy-up)即可恢复。
   2. 住宅 SOCKS5 账号有效且未封国内 IP。
-- up 脚本探活 = **真 SOCKS5 握手 + 经 Clash CONNECT 到住宅**(TCP `/dev/tcp` 探测会被住宅端口假活骗过,别再用);任何一跳不通:**不装 DNS 劫持**(DNS 回落 Windows 192.168.0.1)**+ 不装 TCP REDIRECT**(裸连,国内站可用),最坏也不会全断。
+- up 脚本探活 = **真 SOCKS5 握手 + 经 Clash CONNECT 到住宅**(TCP `/dev/tcp` 探测会被住宅端口假活骗过,别再用);任何一跳不通:**TCP REDIRECT 照装(fail-closed,不降级裸连)**,结果就是连不上;DNS 劫持仅在 dnsfwd 真能答时装(见 §15 已知缺口)。
 - redsocks、iptables(apt 已装);`dnf` 不依赖。
 - **Windows Clash 是住宅链路的第一跳**(`0.0.0.0:7890`, Allow LAN),WSL 经网关 IP 访问;住宅挂了 = 换号/改 IP,只改 `/etc/gost.env`(或改 `wslproxy.env` 后重跑 `sudo ./install.sh`)。
 - ⚠️ **开机没有任何代理守护进程**——`wsl` 冷启动不会卡;代价是:**任何交互登录之前**启动的非交互会话(如工具直接 `wsl -e ...`)走的是裸连(→ Windows NAT/Clash 节点)。登录一次 WSL 终端后规则即全局生效(含后续所有非交互 shell)。
@@ -180,7 +180,7 @@ claude
 
 ## 9. 关键文件内容(便于重建)
 
-**`/usr/local/bin/proxy-up.sh`**(现行逻辑):读 `/etc/gost.env` → 取 WSL 网关 IP(变了就先杀掉占着 12346 的旧 gost)→ 起 gost 链式(`-L=socks5://127.0.0.1:12346 -F=socks5://<gw>:7890(Clash) -F=socks5://<user>:<pass>@<RES_IP>:443`,pidfile `/run/wslproxy-gost.pid`)→ 链式探活(真 SOCKS5 经 Clash CONNECT 到住宅,3 次重试)→ 链路通才起 dnsfwd(上游 `127.0.0.1:12346`)→ 建 `WSLPROXY` nat 链(排除私网/CGNAT/link-local/组播/住宅自身, `172.16/12` 覆盖 Clash 网关防回环)→ `TCP REDIRECT 12345`;DNS 劫持(UDP/TCP 53 → 1053)仅当 dnsfwd 真能答时装;链路不通则不装任何规则降级裸连。
+**`/usr/local/bin/proxy-up.sh`**(现行逻辑):读 `/etc/gost.env` → 取 WSL 网关 IP(变了就先杀掉占着 12346 的旧 gost)→ 起 gost 链式(`-L=socks5://127.0.0.1:12346 -F=socks5://<gw>:7890(Clash) -F=socks5://<user>:<pass>@<RES_IP>:443`,pidfile `/run/wslproxy-gost.pid`)→ 链式探活(真 SOCKS5 经 Clash CONNECT 到住宅,3 次重试)→ 链路通才起 dnsfwd(上游 `127.0.0.1:12346`)→ 建 `WSLPROXY` nat 链(排除私网/CGNAT/link-local/组播/住宅自身, `172.16/12` 覆盖 Clash 网关防回环)→ `TCP REDIRECT 12345`;DNS 劫持(UDP/TCP 53 → 1053)仅当 dnsfwd 真能答时装;**TCP REDIRECT 无条件安装(不降级,链路死就不通)**。
 **`/etc/redsocks.conf`**:`local_ip=127.0.0.1 local_port=12345 type=socks5 ip=127.0.0.1 port=12346;daemon=on;redirector=iptables`(无 login/password;上游就是本地 gost 链式)。
 **`~/.bashrc` 出口块**:`WSL_PROXY=off` 时 `proxy-down.sh` 并清 env;否则 `proxy-up.sh` 并清掉旧的 http_proxy 等 env(所有流量已由 REDIRECT 接管)。
 
@@ -236,7 +236,7 @@ WSL → iptables REDIRECT → dnsfwd(1053)  ┘    Hop2: 住宅 socks5(<RES_IP>:
 |---|---|
 | `/etc/redsocks.conf` | 上游 `ip/port` <RES_IP>:443(带账号)→ `127.0.0.1:12346`(no-auth);**去掉 login/password**;**不要写 # 注释** |
 | `/usr/local/bin/dnsfwd.py` | 问候包从只声明 user/pass(`05 01 02`)改为 no-auth+user/pass(`05 02 00 02`);启动参数上游改 `127.0.0.1:12346` |
-| `/usr/local/bin/proxy-up.sh` | 新增:动态取 WSL 网关 IP 作 Clash 跳板;起 gost 链式(pidfile `/run/wslproxy-gost.pid`);链式探活 = 真 SOCKS5 经 Clash CONNECT 到住宅(3 次重试);**链路不通则不装任何 nat 规则(降级裸连)**;DNS 劫持仅在 dnsfwd 真能答(NOERROR+有应答)时装;刷新 `/etc/gost.env` 的 CLASH_GW 并按需重启 gost-winproxy |
+| `/usr/local/bin/proxy-up.sh` | 新增:动态取 WSL 网关 IP 作 Clash 跳板;起 gost 链式(pidfile `/run/wslproxy-gost.pid`);链式探活 = 真 SOCKS5 经 Clash CONNECT 到住宅(3 次重试);**(2026-10-11 起已改为不降级,见 §15)**;DNS 劫持仅在 dnsfwd 真能答(NOERROR+有应答)时装;刷新 `/etc/gost.env` 的 CLASH_GW 并按需重启 gost-winproxy |
 | `/usr/local/bin/proxy-down.sh` | 增加杀 gost 链式进程 + 清两个 pidfile |
 | `/etc/systemd/system/gost-winproxy.service` | ExecStart 增加第一跳 `-F=socks5://${CLASH_GW}:7890`(Clash),住宅退居第二跳 |
 | `~/network-backup/pre-clash-chain-*/` | 上述文件改前快照 |
@@ -245,11 +245,11 @@ WSL → iptables REDIRECT → dnsfwd(1053)  ┘    Hop2: 住宅 socks5(<RES_IP>:
 - WSL 透明代理:`curl ifconfig.me` = `<RES_IP>`(SG DataZone);`github.com` 200;`getent` 返回真实 IP
 - 非交互 shell(`wsl -e curl`)同样走住宅
 - Windows 侧:`curl -4 -x socks5://172.21.x.x:7894` / `-x http://172.21.x.x:7893` = `<RES_IP>`(加 `-4`)
-- 降级路径:链路任一跳不通 → 不装规则 → 裸连(至少 DNS/国内站可用)
+- ~~降级路径~~(2026-10-11 废止):链路任一跳不通 → 照样装规则 → 连不上(fail-closed)
 
 **依赖与注意**:
 - Windows Clash 必须常开(开机自启);Allow LAN 保持开启(`0.0.0.0:7890`)。
-- Windows 重启后 Clash 若晚于 WSL 首个终端启动:首个终端降级裸连,Clash 起来后**开个新终端**即恢复(proxy-up 每次登录重跑)。
+- Windows 重启后 Clash 若晚于 WSL 首个终端启动:WSL 外网不通(不降级),Clash 起来后**开个新终端**即恢复(proxy-up 每次登录重跑)。
 - gost-winproxy 现在也依赖 Clash;Clash 挂了你从 Windows 也连不上 `WIN_HTTP_PORT`/`WIN_SOCKS_PORT`(默认 7893/7894)。
 - 排障顺序:`tail -20 /tmp/wslproxy-up.log`(chain_check/dnsfwd_check 结果)→ `pgrep -af "gost -L"` → `curl -s https://ifconfig.me`。
 
@@ -271,3 +271,21 @@ WSL → iptables REDIRECT → dnsfwd(1053)  ┘    Hop2: 住宅 socks5(<RES_IP>:
 | `tools/dnstest.py` | — | DNS 测速:`python3 tools/dnstest.py 1053` |
 
 `.bashrc` 块用 `# >>> wsl-network-setup >>>` / `# <<< wsl-network-setup <<<` 标记,重装时整块替换;旧版手写的 `# ===== 出口逻辑 … 出口 end =====` 块也会被一并替换。
+
+---
+
+## 15. fail-closed:不降级裸连(2026-10-11)
+
+**决策**:链路(Clash / 住宅 / gost)任一跳不通时,**不再回落直连**,宁可不通。
+
+**已落实**(`files/proxy-up.sh`):
+- `WSLPROXY` 链与 `OUTPUT -p tcp -j WSLPROXY` 无条件安装,TCP 一律 REDIRECT 到 redsocks;链路死则连接失败。
+- dnsfwd 无条件拉起;探活失败只写日志(`chain unhealthy -> 照样装规则`),不再据此跳过规则。
+
+**仍存在的缺口(按需再收紧)**:
+| 缺口 | 现象 | 收紧办法 |
+|---|---|---|
+| dnsfwd 不能答时不装 DNS 劫持 | DNS 回落 Windows 解析器(DNS 泄露,但 TCP 仍不通) | DNS REDIRECT 也无条件装(DNS 一并不通) |
+| 登录前的非交互会话 | 规则未装 → 裸连 | 需开机即装规则(但 §11 的教训:不能开守护进程) |
+| UDP 非 53(QUIC 等)、ICMP | 裸连 | `OUTPUT` 对非私网 UDP/ICMP 加 REJECT |
+| `WSL_PROXY=off` / `proxy-down.sh` | 主动裸连 | 显式开关,保留 |
