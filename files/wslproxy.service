@@ -1,0 +1,17 @@
+[Unit]
+Description=WSL 透明代理:开机即装杀开关 + iptables 规则 + gost/redsocks/dnsfwd(fail-closed)
+After=network.target
+# 早于用户管理器:用户级服务(claudecode-web 等)起来时规则必定已在
+Before=user@__UID__.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# --boot 跳过探活;规则无条件安装,链路没好就是"连不上",不会裸连
+ExecStart=/usr/local/bin/proxy-up.sh --boot
+# 不要 stop 时拆规则:停单元 ≠ 允许裸连。显式裸连只能 proxy-down.sh / WSL_PROXY=off
+KillMode=process
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

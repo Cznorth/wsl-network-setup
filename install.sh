@@ -225,6 +225,19 @@ EOF
 chown "$TARGET_USER": "$RC"
 ok "$RC 已写入 wsl-network-setup 块"
 
+# 开机单元:WSL 一启动(早于任何用户服务)就装杀开关+规则+守护进程,不等第一次交互登录
+if [ -d /run/systemd/system ]; then
+    TARGET_UID=$(id -u "$TARGET_USER")
+    sed "s/__UID__/$TARGET_UID/" "$SRC/files/wslproxy.service" > /etc/systemd/system/wslproxy.service
+    systemctl daemon-reload
+    systemctl enable wslproxy >/dev/null 2>&1
+    # 用户级服务(如 claudecode-web)无登录会话时也要能起来
+    loginctl enable-linger "$TARGET_USER" 2>/dev/null
+    ok "wslproxy.service 已启用(开机先装杀开关+规则,早于 user@$TARGET_UID);已对 $TARGET_USER 开启 linger"
+else
+    warn "WSL 未启用 systemd,跳过 wslproxy.service(只能靠登录时装规则,登录前有窗口)"
+fi
+
 if [ "$WINPROXY" = 1 ]; then
     if [ -d /run/systemd/system ]; then
         sed "s/__USER__/$TARGET_USER/" "$SRC/files/gost-winproxy.service" > /etc/systemd/system/gost-winproxy.service

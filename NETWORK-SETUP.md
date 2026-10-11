@@ -266,8 +266,9 @@ WSL → iptables REDIRECT → dnsfwd(1053)  ┘    Hop2: 住宅 socks5(<RES_IP>:
 | `files/proxy-down.sh` | `/usr/local/bin/` | 拆规则 + 杀进程;gost 按端口匹配(网关变了也杀得掉) |
 | `files/dnsfwd.py` | `/usr/local/bin/` | DNS 转发器 v2;默认上游 = 本地 gost 链式,不含凭据 |
 | `files/redsocks.conf` | `/etc/` | 无 `#` 注释(见 §12) |
+| `files/wslproxy.service` | `/etc/systemd/system/` | 开机 oneshot:`proxy-up.sh --boot` 先装杀开关+规则(`Before=user@<uid>.service`),`install.sh` 同时对用户 `enable-linger`;关闭"登录前"窗口 |
 | `files/gost-winproxy.service` | `/etc/systemd/system/` | `__USER__` 安装时替换为当前用户;端口走 `${WIN_HTTP_PORT}`/`${WIN_SOCKS_PORT}` 环境变量展开 |
-| `tools/net_check.sh` | — | 检测:`bash tools/net_check.sh [-q 快速] [-j JSON] [-L 只测延迟]`;含全链路逐跳延迟(见 §5) |
+| `tools/net_check.sh` | — | 检测:`bash tools/net_check.sh [-q 快速] [-j JSON] [-L 只测延迟] [-n 跳过预检]`;**先做连通性预检(本地中间件→Clash→链式握手→端到端→DNS),不通则报断点并 rc=2 退出**;含全链路逐跳延迟(见 §5) |
 | `tools/dnstest.py` | — | DNS 测速:`python3 tools/dnstest.py 1053` |
 
 `.bashrc` 块用 `# >>> wsl-network-setup >>>` / `# <<< wsl-network-setup <<<` 标记,重装时整块替换;旧版手写的 `# ===== 出口逻辑 … 出口 end =====` 块也会被一并替换。

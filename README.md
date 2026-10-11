@@ -13,7 +13,7 @@ WSL2 里让**所有出口**(含 DNS、非交互 shell、不读环境变量的程
 git clone https://github.com/Cznorth/wsl-network-setup.git && cd wsl-network-setup
 cp wslproxy.env.example wslproxy.env && vi wslproxy.env   # 填住宅地址/端口/账号/密码(Windows 端口 WIN_HTTP_PORT/WIN_SOCKS_PORT 可选)
 sudo ./install.sh                                         # --no-winproxy 跳过 Windows 端口
-bash tools/net_check.sh                                   # 检测出口 / DNS 泄露 / 纯净度 / 全链路延迟
+bash tools/net_check.sh                                   # 先做连通性预检(不通即中止 rc=2),再检测出口 / DNS 泄露 / 纯净度 / 全链路延迟
 bash tools/net_check.sh -L                                # 只测延迟:逐跳拆分,找出慢在哪一段
 ```
 

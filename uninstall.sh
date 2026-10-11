@@ -8,6 +8,13 @@ TARGET_HOME=$([ -n "$TARGET_USER" ] && getent passwd "$TARGET_USER" | cut -d: -f
 
 [ -x /usr/local/bin/proxy-down.sh ] && /usr/local/bin/proxy-down.sh && echo "已拆规则 + 停进程"
 
+if [ -f /etc/systemd/system/wslproxy.service ]; then
+    systemctl disable wslproxy >/dev/null 2>&1
+    rm -f /etc/systemd/system/wslproxy.service
+    systemctl daemon-reload
+    echo "已删除 wslproxy.service"
+fi
+
 if [ -f /etc/systemd/system/gost-winproxy.service ]; then
     systemctl disable --now gost-winproxy >/dev/null 2>&1
     rm -f /etc/systemd/system/gost-winproxy.service

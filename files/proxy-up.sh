@@ -20,7 +20,11 @@
 #   [CLASH_PORT=7890] [DNS_UPSTREAM=8.8.8.8:53]
 #   [WIN_HTTP_PORT=7893] [WIN_SOCKS_PORT=7894](WSL 暴露给 Windows 的长期端口)
 #   CLASH_GW 由本脚本每次刷新。
+# 用法:proxy-up.sh [--boot]
+#   --boot  开机单元(wslproxy.service)用:跳过两个探活(最多等 ~1 分钟),先把杀开关+规则装上;
+#           此时 Windows 的 Clash 往往还没起,gost 按请求懒连上游,Clash 起来后自然通。
 set -u
+BOOT=0; [ "${1:-}" = "--boot" ] && BOOT=1
 IPT=/usr/sbin/iptables
 GOST=/usr/local/bin/gost
 GOSTENV=/etc/gost.env
@@ -132,8 +136,8 @@ chain_check(){
 }
 
 CHAIN_OK=0
-chain_check && CHAIN_OK=1
-log "chain_check rc=$CHAIN_OK (clash=$CLASH_GW:$CLASH_PORT res=$RES_HOST:$RES_PORT)"
+if [ "$BOOT" = 1 ]; then CHAIN_OK=1; else chain_check && CHAIN_OK=1; fi
+log "chain_check rc=$CHAIN_OK$([ "$BOOT" = 1 ] && echo ' (boot:跳过)') (clash=$CLASH_GW:$CLASH_PORT res=$RES_HOST:$RES_PORT)"
 
 # ---------- 3) dnsfwd:无条件起;上游 = 本地链式代理(no-auth) ----------
 # 不用 CHAIN_OK 做前置条件:链式探活有假阴性(住宅限速会 EOF),
@@ -161,8 +165,8 @@ except Exception: sys.exit(1)
 PYEOF
 }
 DNS_OK=0
-dnsfwd_check && DNS_OK=1
-log "dnsfwd_check ok=$DNS_OK"
+if [ "$BOOT" = 1 ]; then DNS_OK=1; else dnsfwd_check && DNS_OK=1; fi
+log "dnsfwd_check ok=$DNS_OK$([ "$BOOT" = 1 ] && echo ' (boot:跳过)')"
 
 # ---------- 4) redsocks:上游在 /etc/redsocks.conf 固定为本地链式代理 ----------
 pgrep -x redsocks >/dev/null 2>&1 || redsocks -c /etc/redsocks.conf

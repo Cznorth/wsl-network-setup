@@ -1,6 +1,6 @@
 [Unit]
 Description=gost - Windows 用长期代理端口(经 Clash 链式 → 住宅 SOCKS5)
-After=network.target
+After=network.target wslproxy.service
 
 [Service]
 Type=simple

@@ -7,6 +7,7 @@
 #   bash net_check.sh -q     # 快速模式(跳过外部情报库, 只看连通性/一致性)
 #   bash net_check.sh -j     # 以 JSON 输出采集到的数据(便于自动化)
 #   bash net_check.sh -L     # 只测全链路延迟(逐跳拆分 + 端到端 + DNS)
+#   bash net_check.sh -n     # 跳过连通性预检(默认先预检,不通则直接退出 rc=2)
 #   bash net_check.sh -h     # 帮助
 #
 # 可选环境变量(提升准确度):
@@ -22,6 +23,8 @@
 #       可选: getent/dig(DNS 检测更准)
 #
 # 检测项:
+#   0. 连通性预检(先通后测): 本地中间件 → Clash 首跳 → 链式 SOCKS5 握手 → 端到端 HTTPS → DNS;
+#      任一环不通即报告断点并退出(rc=2),不再逐项超时
 #   1. 出口 IP 一致性(多来源交叉验证, 发现分流/泄露)
 #   2. IPv4 / IPv6 出口是否分离(IPv6 泄露)
 #   3. IP 情报: 代理/VPN/机房/Tor 特征、 WhoIS 组织、 rDNS
@@ -32,13 +35,14 @@
 # =============================================================================
 
 TIMEOUT="${TIMEOUT:-8}"
-QUICK=0; JSONONLY=0; LATONLY=0
+QUICK=0; JSONONLY=0; LATONLY=0; SKIPPRE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     -q|--quick) QUICK=1 ;;
     -j|--json) JSONONLY=1 ;;
     -L|--latency) LATONLY=1 ;;
-    -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
+    -n|--no-precheck) SKIPPRE=1 ;;
+    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
     *) echo "未知参数: $1 (用 -h 查看帮助)"; exit 1 ;;
   esac
   shift
@@ -320,6 +324,112 @@ latency_section() {
     fi
   fi
 }
+
+# ======================================================== 0. 连通性预检 =====
+# 先通后测:链路不通时后面所有项都会超时,既慢又无意义。
+# 顺序 = 数据流方向,第一个失败的环就是断点。
+PRE_OK=1; PRE_FAIL=""; PRE_HINT=""; PRE_E2E_MS=""
+pre_fail() { # pre_fail <环节> <提示>
+  PRE_OK=0
+  [ -z "$PRE_FAIL" ] && { PRE_FAIL="$1"; PRE_HINT="$2"; }
+}
+listening() { # listening <tcp|udp> <port>
+  if have ss; then
+    if [ "$1" = udp ]; then ss -lunH 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]$2\$"
+    else ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]$2\$"; fi
+  else
+    (exec 3<>"/dev/tcp/127.0.0.1/$2") 2>/dev/null
+  fi
+}
+precheck() {
+  hdr "0. 连通性预检 (先通后测)"
+  local line hop1 hop2 clash_h clash_p res_h="" res_p="" chain=0
+
+  # --- A. 本地中间件(仅透明代理/链式环境) ---
+  line="$(pgrep -af '^/usr/local/bin/gost -L=socks5://127\.0\.0\.1:12346 ' 2>/dev/null | head -n1)"
+  if [ -n "$line" ]; then
+    chain=1
+    ok "gost 链式进程在运行 (127.0.0.1:12346)"
+    listening tcp 12346 || pre_fail "本地 gost" "gost 进程在但 12346 未监听: sudo -n /usr/local/bin/proxy-up.sh"
+    if listening tcp 12345; then ok "redsocks 监听 12345"
+    else bad "redsocks 未监听 12345"; pre_fail "redsocks" "TCP 全断: 看 /etc/redsocks.conf(不能有 # 注释)后 sudo -n /usr/local/bin/proxy-up.sh"; fi
+    if listening udp 1053 || listening tcp 1053; then ok "dnsfwd 监听 1053"
+    else bad "dnsfwd 未监听 1053"; pre_fail "dnsfwd" "DNS 全断: sudo -n /usr/local/bin/proxy-up.sh,日志 /tmp/wslproxy-up.log"; fi
+  else
+    info "未发现本机 gost 链式进程 —— 非链式环境,跳过中间件/逐跳预检,只测端到端"
+  fi
+
+  # --- B. Clash 首跳 TCP + C. 链式 SOCKS5 握手(真握手,TCP 端口假活会骗过 /dev/tcp) ---
+  if [ "$chain" -eq 1 ]; then
+    hop1="${CLASH:-$(printf '%s' "$line" | grep -oE -- '-F=socks5://[^ ]+' | sed -n 1p | sed 's#^-F=socks5://##')}"
+    hop2="${RES:-$(printf '%s' "$line" | grep -oE -- '-F=socks5://[^ ]+' | sed -n 2p | sed 's#^-F=socks5://##')}"
+    clash_h="${hop1%:*}"; clash_p="${hop1##*:}"
+    [[ "$hop2" == *@* ]] && hop2="${hop2##*@}"
+    res_h="${hop2%:*}"; res_p="${hop2##*:}"
+    if [ -n "$clash_h" ] && timeout 4 bash -c "exec 3<>/dev/tcp/$clash_h/$clash_p" 2>/dev/null; then
+      ok "Clash 首跳可达 ($clash_h:$clash_p)"
+    else
+      bad "Clash 首跳不可达 (${clash_h:-?}:${clash_p:-?})"
+      pre_fail "Clash 首跳" "Windows Clash 没运行 / 没开 Allow LAN / 网关 IP 变了: 启动 Clash 后 sudo -n /usr/local/bin/proxy-up.sh"
+    fi
+    if [ -n "$res_h" ] && have python3; then
+      if timeout 30 python3 - 127.0.0.1 12346 "$res_h" "$res_p" <<'PYEOF' 2>/dev/null
+import socket,sys
+h,p,res,rp=sys.argv[1],int(sys.argv[2]),sys.argv[3],int(sys.argv[4])
+def rd(s,n):
+    b=b""
+    while len(b)<n:
+        c=s.recv(n-len(b))
+        if not c: raise OSError("eof")
+        b+=c
+    return b
+try:
+    s=socket.create_connection((h,p),timeout=8); s.settimeout(20)
+    s.sendall(b"\x05\x01\x00"); assert rd(s,2)==b"\x05\x00"
+    s.sendall(b"\x05\x01\x00\x01"+socket.inet_aton(res)+rp.to_bytes(2,"big"))
+    r=rd(s,10); sys.exit(0 if r[1]==0 else 1)
+except Exception: sys.exit(1)
+PYEOF
+      then ok "链式 SOCKS5 握手通 (本地 → Clash → 住宅 $res_h:$res_p)"
+      else
+        warn "链式握手失败 (Clash→住宅;住宅限速偶发,下面端到端为准)"
+        [ -z "$PRE_FAIL" ] && PRE_HINT="链式握手失败:住宅封国内来源/账号失效/节点慢,看 /tmp/wslproxy-up.log"
+      fi
+    fi
+  fi
+
+  # --- D. 端到端 HTTPS(最终判据;偶发超时重试 3 次) ---
+  local i code t0 t1 got=0
+  for i in 1 2 3; do
+    t0=$(date +%s%3N)
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time "$TIMEOUT" --connect-timeout 6 "${LAT_URL:-https://www.gstatic.com/generate_204}" 2>/dev/null)"
+    t1=$(date +%s%3N)
+    if [ "$code" = 204 ] || [ "$code" = 200 ]; then got=1; PRE_E2E_MS=$(( t1 - t0 )); break; fi
+  done
+  if [ "$got" -eq 1 ]; then ok "端到端 HTTPS 通 (${PRE_E2E_MS} ms,第 ${i} 次)"
+  else bad "端到端 HTTPS 不通 (3 次均失败, http=${code:-000})"
+       pre_fail "端到端 HTTPS" "${PRE_HINT:-链路任一跳不通;规则 fail-closed,外网即不通。看 tail -20 /tmp/wslproxy-up.log}"; fi
+
+  # --- E. DNS ---
+  if have getent && timeout 8 getent hosts www.gstatic.com >/dev/null 2>&1; then ok "DNS 解析正常"
+  else bad "DNS 解析失败"; pre_fail "DNS" "dnsfwd 或其上游链路不通(fail-closed 下 DNS 不回落 Windows)"; fi
+}
+
+if [ "$SKIPPRE" -eq 0 ]; then
+  precheck
+  if [ "$PRE_OK" -eq 0 ]; then
+    if [ "$JSONONLY" -eq 1 ]; then
+      esc2() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\n'; }
+      printf '{"connectivity": false, "failed_at": "%s", "hint": "%s"}\n' "$(esc2 "$PRE_FAIL")" "$(esc2 "$PRE_HINT")"
+    else
+      printf '\n'
+      bad "连通性预检未通过 —— 断点: ${PRE_FAIL}"
+      info "处理: ${PRE_HINT}"
+      info "(链路不通时后续检测全部会超时,已中止;确要强行检测用 -n 跳过预检)"
+    fi
+    exit 2
+  fi
+fi
 
 if [ "$LATONLY" -eq 1 ]; then latency_section; exit 0; fi
 
