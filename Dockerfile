@@ -45,9 +45,14 @@ RUN ln -snf /usr/share/zoneinfo/Asia/Singapore /etc/localtime \
     && echo Asia/Singapore > /etc/timezone
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-COPY files/proxy-up.sh files/proxy-down.sh files/dnsfwd.py files/win /usr/local/bin/
+COPY files/proxy-up.sh files/proxy-down.sh files/dnsfwd.py files/win files/winrun files/winpy files/wslpath /usr/local/bin/
 COPY files/redsocks.conf /etc/redsocks.conf
-RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh /usr/local/bin/proxy-up.sh /usr/local/bin/proxy-down.sh /usr/local/bin/win
+# 容器里没有 WSL interop：常用 Windows 程序做成同名 shim，经 winrun（SSH）在 Windows 上执行
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh /usr/local/bin/proxy-up.sh /usr/local/bin/proxy-down.sh \
+         /usr/local/bin/win /usr/local/bin/winrun /usr/local/bin/winpy /usr/local/bin/wslpath \
+    && for x in ffmpeg ffprobe node npx nvidia-smi powershell cmd; do \
+         printf '#!/bin/sh\nexec winrun %s "$@"\n' "$x" > "/usr/local/bin/$x.exe"; chmod 0755 "/usr/local/bin/$x.exe"; \
+       done
 
 # Use a stable UID/home; the entrypoint assigns a persistent random login name
 # per home volume. Numeric USER also makes docker exec use that account.

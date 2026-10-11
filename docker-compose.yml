@@ -26,6 +26,11 @@ services:
       CLASH_HOST: "${CLASH_HOST:-host.docker.internal}"
       CLASH_PORT: "${CLASH_PORT:-7890}"
       DNS_UPSTREAM: "${DNS_UPSTREAM:-8.8.8.8:53}"
+      # `win` / `winrun` / `*.exe` shim: SSH into this host's Windows OpenSSH
+      # (enable with files/windows/enable-sshd.ps1; key from setup-docker-proxy.ps1).
+      WIN_SSH_USER: "${WIN_USER:-}"
+      WIN_SSH_HOST: "${WIN_SSH_HOST:-host.docker.internal}"
+      WIN_SSH_PORT: "${WIN_SSH_PORT:-22}"
       HTTP_PROXY: ""
       HTTPS_PROXY: ""
       ALL_PROXY: ""
@@ -59,6 +64,9 @@ services:
       - type: bind
         source: "D:/"
         target: /mnt/d
+      # Private key for `win` (read-only; the entrypoint copies it to ~/.ssh/winssh).
+      # A missing file becomes an empty directory and `win` stays disabled.
+      - "${WIN_SSH_KEY_FILE:-./keys/winssh}:/etc/wslproxy/winssh:ro"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS https://api.ipify.org >/dev/null"]
       interval: 30s

@@ -3,3 +3,4 @@ wslproxy.env
 docker-proxies/
 __pycache__/
 *.pyc
+keys/

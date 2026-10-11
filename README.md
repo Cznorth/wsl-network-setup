@@ -17,7 +17,7 @@ WSL2 里让**所有出口**(含 DNS、非交互 shell、不读环境变量的程
 | 接管方式 | `iptables nat REDIRECT` + redsocks + dnsfwd | 容器内同款透明代理,服务器直连住宅 | 容器内 `iptables OUTPUT REDIRECT` + redsocks + dnsfwd |
 | 出口链路 | WSL → Clash → 住宅 SOCKS5 | 服务器 → 住宅 SOCKS5(不经 Clash) | 容器 → Clash → 住宅 SOCKS5(可 `USE_CLASH=0` 直连) |
 | 断链行为 | fail-closed,外网不通且不泄露 | 同左(容器内杀开关) | 同左 |
-| 访问 Windows 文件 | 原生 `/mnt/c`、`/mnt/d` | sshfs 经反向隧道挂载,容器内 `win <cmd>` 在 Windows 执行 | 直接挂载 `C:`、`D:` 到 `/mnt/c`、`/mnt/d` |
+| 访问 Windows 文件 | 原生 `/mnt/c`、`/mnt/d` | sshfs 经反向隧道挂载,容器内 `win <cmd>` 在 Windows 执行 | 直接挂载 `C:`、`D:` 到 `/mnt/c`、`/mnt/d`,容器内 `win` / `winrun` / `ffmpeg.exe` 等经 SSH 在 Windows 执行 |
 | 进入方式 | 直接用 WSL | Windows 上 `rewsl`(多台为 `rewsl-<name>`) | PowerShell 快捷命令 `bash1`、`bash2`… |
 | 部署入口 | `./setup.sh`(或 `install.sh`) | `./deploy-server.sh --host … --name …` | `docker compose up -d --build` 或 `tools/setup-docker-proxy.ps1` |
 | 适合场景 | 日常开发,所有程序零配置走代理 | 要一台与本机隔离、长期在线、固定海外网络的工作环境 | 要隔离环境或第二/第三个出口,不想动 WSL 网络栈 |
@@ -118,6 +118,32 @@ ls /mnt/d
 
 若 Docker Desktop 提示无权访问盘符，在 Docker Desktop 的资源或文件共享设置中允许 `C:`、`D:` 两个盘。
 
+### 在容器里调用 Windows 程序（`win` / `winrun`）
+
+容器里没有 WSL interop。直接运行 `.exe` 会报 `UtilBindVsockAnyPort: socket failed 1`：Docker 的 seccomp 拦了 vsock。所以容器改走 SSH，经 `host.docker.internal:22` 连本机的 Windows OpenSSH（只监听 127.0.0.1，Docker Desktop 的主机网关可以转发到这里）：
+
+| 命令 | 作用 |
+|---|---|
+| `win <cmd>` | 在 Windows 上执行一行 cmd 命令（交互式时不带参数） |
+| `winrun [-e K=V] <exe> [args...]` | 逐个参数正确加引号，支持中文路径和空格；`WSLENV` 里列出的变量会一并传过去；返回远端退出码 |
+| `ffmpeg.exe` `ffprobe.exe` `node.exe` `npx.exe` `nvidia-smi.exe` `powershell.exe` `cmd.exe` | 同名 shim，WSL 里的写法不用改 |
+| `wslpath -w <路径>` | 简易版：只转换 `/mnt/<盘>/...` → `X:\...` |
+| `winpy <Windows venv 目录> [参数...]` | 用 Windows 侧某个 venv 的 Python 执行，例如 GPU 上的 TTS、Whisper |
+
+以上命令都会自动把当前目录 `/mnt/<盘>/...` 映射为 Windows 目录。
+
+一次性准备：
+1. 以管理员身份运行 `files\windows\enable-sshd.ps1 -User <Windows 用户名>`，启用 sshd。
+2. 运行 `tools\setup-docker-proxy.ps1`。它会生成 `keys\winssh`（被 Git 忽略），把公钥追加到 `%USERPROFILE%\.ssh\authorized_keys`，再把 `WIN_USER`、`WIN_SSH_KEY_FILE` 写进实例的 `.env`。
+3. 直接用 `docker compose` 时，自己在 `.env` 里填这两项。
+
+在容器里运行 `win ver` 自检。
+
+几个坑：
+- **authorized_keys 放哪个文件**：`enable-sshd.ps1` 写的 `sshd_config` 没有 `Match Group administrators` 段，所以管理员账户读的也是用户目录下的 `authorized_keys`。如果是 Windows 默认配置，管理员账户读的是 `%ProgramData%\ssh\administrators_authorized_keys`。
+- **不要直接调 venv 里的 `python.exe`**：uv 建的 venv 里，`Scripts\python.exe` 是一个跳板程序，它指向 uv 的目录联接（`cpython-3.12-...`）。SSH 登录不是交互式会话，Windows 会把这个联接当成“不受信任的装入点”，拒绝访问，报 `uv trampoline failed to spawn Python child process`。`winpy` 改为直接启动真实的基础解释器，并设置 `__PYVENV_LAUNCHER__`。另外还要把该 venv 的 `pyvenv.cfg` 里的 `home` 改成带完整版本号的真实目录（`cpython-3.12.13-...`）。`winpy` 发现没改时会打印提示。
+- **ps1 文件编码**：要给 Windows PowerShell 5.1 运行的 `.ps1` 只能用 ASCII，或者带 BOM 的 UTF-8。否则中文注释会按 ANSI 解码，把下一行一起吞掉。
+
 PowerShell Profile 可以由一键脚本自动加入 `bash1`、`bash2` 等快捷命令。每个实例使用独立的 Compose 项目、凭据文件和一对自动分配的 Windows 端口，脚本会检查端口占用，避免多个容器冲突。它会根据当前目录自动选择容器内的对应路径：`C:\Users\...` → `/mnt/c/Users/...`，`D:\...` → `/mnt/d/...`；容器未运行时会先自动启动。
 
 首次配置（脚本会优先读取仓库根目录 `.env`，缺少凭据时才询问）：
@@ -147,7 +173,7 @@ bash2
 | 目录 | 内容 |
 |---|---|
 | `install.sh` / `uninstall.sh` | 一键安装(幂等,先备份)/ 卸载 |
-| `files/` | 装到系统里的脚本和配置(`proxy-up.sh`、`proxy-down.sh`、`dnsfwd.py`、`redsocks.conf`、`gost-winproxy.service`) |
+| `files/` | 装到系统里的脚本和配置(`proxy-up.sh`、`proxy-down.sh`、`dnsfwd.py`、`redsocks.conf`、`gost-winproxy.service`;容器用的 `win`、`winrun`、`winpy`、`wslpath`) |
 | `tools/` | `net_check.sh`(出口/泄露/纯净度/逐跳延迟检测)、`dnstest.py`(DNS 测速)、`setup-docker-proxy.ps1`(多容器一键配置) |
 
 > 本仓库为**脱敏版**:住宅 IP/账号/密码/内网地址已替换为占位符(`<RES_IP>` / `<user>` / `<pass>`)。凭据只存在本机 `/etc/gost.env`(600)和你自己的 `wslproxy.env`(已 gitignore)。

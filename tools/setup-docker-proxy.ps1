@@ -99,6 +99,30 @@ $ports = Get-FreePortPair $startPort
 $httpPort = $ports[0]
 $socksPort = $ports[1]
 
+# `win`：容器经 host.docker.internal:22 SSH 到本机 Windows OpenSSH（files/windows/enable-sshd.ps1 启用）。
+# 所有实例共用一把专用密钥，公钥追加到当前用户的 authorized_keys。
+# enable-sshd.ps1 写的 sshd_config 没有 "Match Group administrators" 段，管理员账户也读这个文件。
+$keyDir = Join-Path $repoRoot 'keys'
+$keyFile = Join-Path $keyDir 'winssh'
+if (-not (Test-Path -LiteralPath $keyFile)) {
+    New-Item -ItemType Directory -Force -Path $keyDir | Out-Null
+    & ssh-keygen.exe -q -t ed25519 -N '' -C 'wslproxy-docker-to-windows' -f $keyFile
+    if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen 生成 win 密钥失败。' }
+}
+$pub = (Get-Content -Raw -LiteralPath "$keyFile.pub").Trim()
+$authKeys = Join-Path $env:USERPROFILE '.ssh\authorized_keys'
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $authKeys) | Out-Null
+$authNow = if (Test-Path -LiteralPath $authKeys) { Get-Content -Raw -LiteralPath $authKeys } else { '' }
+if (-not $authNow.Contains($pub)) {
+    if ($authNow -and -not $authNow.EndsWith("`n")) { Add-Content -Encoding ascii -LiteralPath $authKeys -Value '' }
+    Add-Content -Encoding ascii -LiteralPath $authKeys -Value $pub
+}
+$sshdConfig = Join-Path $env:ProgramData 'ssh\sshd_config'
+if ((Test-Path -LiteralPath $sshdConfig) -and (Select-String -LiteralPath $sshdConfig -Pattern '^\s*Match\s+Group\s+administrators' -Quiet)) {
+    Write-Warning "sshd_config 含 Match Group administrators：管理员账户需把 $keyFile.pub 加到 $env:ProgramData\ssh\administrators_authorized_keys（或先运行 files\windows\enable-sshd.ps1）。"
+}
+$winKeyFile = $keyFile -replace '\\', '/'
+
 $instanceDir = Join-Path $stateRoot $Name
 New-Item -ItemType Directory -Force -Path $instanceDir | Out-Null
 $instanceEnv = Join-Path $instanceDir '.env'
@@ -117,6 +141,8 @@ DNS_UPSTREAM=$dnsUpstream
 HTTP_PORT=$httpPort
 SOCKS_PORT=$socksPort
 PROXY_BIND_ADDRESS=0.0.0.0
+WIN_USER=$env:USERNAME
+WIN_SSH_KEY_FILE=$winKeyFile
 "@ | Set-Content -Encoding ascii -NoNewline -LiteralPath $instanceEnv
 
 $wslEnvPath = "/home/cznorth/wsl-network-setup/docker-proxies/$Name/.env"
@@ -179,3 +205,4 @@ foreach ($profile in @($PROFILE, 'D:\Cznorth\Documents\WindowsPowerShell\Microso
 }
 
 Write-Host "实例 $Name 已配置：HTTP $httpPort，SOCKS5 $socksPort，快捷命令 bash$aliasIndex"
+Write-Host "容器内可用 win / winrun / ffmpeg.exe 等在 Windows 上执行命令；自检：docker compose --project-name $project exec residential-proxy win ver"

@@ -1,0 +1,21 @@
+#!/bin/sh
+# winpy <Windows venv 目录> [python 参数...]：用 Windows 侧某个 venv 的 Python 执行（经 winrun）
+#   例：winpy 'C:\Users\me\tts\venv' -I script.py
+# 不直接调 venv\Scripts\python.exe：uv 建的 venv 里它是跳板程序，路径指向 uv 的目录联接
+# （cpython-3.12-...），SSH 会话里 Windows 把联接当“不受信任的装入点”拒绝访问。
+# 这里改为直接启动真实的基础解释器，并用 __PYVENV_LAUNCHER__ 让它按该 venv 启动。
+set -e
+venv=$1; shift
+cfg="$(wslpath_u() { printf '/mnt/%s%s' "$(printf %s "$1" | cut -c1 | tr A-Z a-z)" "$(printf %s "$1" | cut -c3- | tr '\\' /)"; }; wslpath_u "$venv")/pyvenv.cfg"
+[ -r "$cfg" ] || { echo "winpy: 读不到 $cfg" >&2; exit 2; }
+home=$(sed -n 's/^home *= *//p' "$cfg" | tr -d '\r')
+ver=$(sed -n 's/^version_info *= *//p' "$cfg" | tr -d '\r')
+case "$home" in
+  *cpython-[0-9].[0-9]*-*)
+    # uv 的短名联接（cpython-3.12-...）在 SSH 会话里不可用，指向带完整版本号的真实目录
+    short=$(printf %s "$home" | sed -n 's/.*cpython-\([0-9]*\.[0-9]*\)-.*/\1/p')
+    case "$home" in *cpython-$short-*) real=$(printf %s "$home" | sed "s/cpython-$short-/cpython-$ver-/");; *) real=$home;; esac
+    [ "$real" != "$home" ] && echo "winpy: 提示：$cfg 的 home 指向目录联接，Python 启动会失败；请改成 $real" >&2
+    home=$real;;
+esac
+exec winrun -e "__PYVENV_LAUNCHER__=$venv\\Scripts\\python.exe" "$home\\python.exe" "$@"

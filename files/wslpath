@@ -1,0 +1,5 @@
+#!/bin/sh
+# 简易 wslpath：只支持 -w（/mnt/x/... → X:\...）
+[ "$1" = "-w" ] && shift
+p=$(realpath -m -- "$1")
+case "$p" in /mnt/[a-zA-Z]/*|/mnt/[a-zA-Z]) d=$(printf %s "${p#/mnt/}" | cut -c1 | tr a-z A-Z); r=${p#/mnt/?}; printf '%s:%s\n' "$d" "$(printf %s "${r:-/}" | tr / '\\')";; *) echo "wslpath: 非 /mnt 路径: $p" >&2; exit 1;; esac
