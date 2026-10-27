@@ -30,7 +30,7 @@ services:
       # (enable with files/windows/enable-sshd.ps1; key from setup-docker-proxy.ps1).
       WIN_SSH_USER: "${WIN_USER:-}"
       WIN_SSH_HOST: "${WIN_SSH_HOST:-host.docker.internal}"
-      WIN_SSH_PORT: "${WIN_SSH_PORT:-22}"
+      WIN_SSH_PORT: "${WIN_SSH_PORT:-2223,22}"   # 2223 = user-session sshd (install-usersshd.ps1), falls back to 22
       HTTP_PROXY: ""
       HTTPS_PROXY: ""
       ALL_PROXY: ""

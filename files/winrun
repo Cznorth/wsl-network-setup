@@ -19,8 +19,18 @@ user = os.environ.get('WIN_SSH_USER', '')
 if not user:
     sys.exit('winrun: 未设置 WIN_SSH_USER（Windows 用户名）')
 key = os.environ.get('WIN_SSH_KEY', os.path.expanduser('~/.ssh/winssh'))
-r = subprocess.run(['ssh', '-i', key, '-p', os.environ.get('WIN_SSH_PORT', '22'), '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes',
+host = os.environ.get('WIN_SSH_HOST', 'host.docker.internal')
+ports = [p for p in os.environ.get('WIN_SSH_PORT', '22').split(',') if p]   # 列表时取第一个连得上的（2223=用户会话 sshd）
+port = ports[-1]
+if len(ports) > 1:
+    import socket
+    for p in ports:
+        try: socket.create_connection((host, int(p)), 1).close(); port = p; break
+        except OSError: pass
+tty = os.environ.get('WIN_TTY', 'auto')
+tty = ['-tt'] if tty == '1' or (tty == 'auto' and sys.stdin.isatty() and sys.stdout.isatty()) else []
+r = subprocess.run(['ssh', *tty, '-i', key, '-p', port, '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes',
                     '-o', 'StrictHostKeyChecking=accept-new', '-o', 'UserKnownHostsFile=' + os.path.expanduser('~/.ssh/known_hosts_win'),
                     '-o', 'ServerAliveInterval=30', '-o', 'LogLevel=ERROR',
-                    f"{user}@{os.environ.get('WIN_SSH_HOST', 'host.docker.internal')}", cmd])
+                    f"{user}@{host}", cmd])
 sys.exit(r.returncode)

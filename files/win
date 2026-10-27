@@ -1,6 +1,11 @@
 #!/bin/sh
 # win [命令...]  在 Windows 主机上执行命令(经反向 SSH 隧道)。
 # 当前目录在 /mnt/<盘>/ 下时自动映射为 <盘>:\...;不带参数则打开交互 cmd。
+# stdin/stdout 都是终端时自动分配远端 PTY(ConPTY),TUI 程序(pi、vim 等)可正常交互;
+# WIN_TTY=1 强制分配,WIN_TTY=0 禁止分配。
+# WIN_SSH_PORT 可写成逗号分隔的列表(如 2223,22),按顺序用第一个连得上的端口:
+# 2223 是 install-usersshd.ps1 装的用户会话 sshd(进程在桌面 Session 1,能弹窗、能读凭据管理器),
+# 22 是系统 sshd 服务(Session 0)。
 HOST=${WIN_SSH_HOST:-192.168.64.1}
 PORT=${WIN_SSH_PORT:-2222}
 USER_=${WIN_SSH_USER:-}
@@ -8,6 +13,17 @@ KEY=${WIN_SSH_KEY:-$HOME/.ssh/winssh}
 
 [ -n "$USER_" ] || { echo "win: 未设置 WIN_SSH_USER(Windows 用户名)" >&2; exit 1; }
 [ -r "$KEY" ] || { echo "win: 缺少密钥 $KEY" >&2; exit 1; }
+case "$PORT" in *,*)
+  PORT=$(python3 - "$HOST" "$PORT" <<'PY'
+import socket, sys
+ports = [p for p in sys.argv[2].split(',') if p]
+for p in ports:
+    try: socket.create_connection((sys.argv[1], int(p)), 1).close(); print(p); break
+    except OSError: pass
+else: print(ports[-1])
+PY
+  ) ;;
+esac
 
 dir=
 case "$PWD" in
@@ -26,7 +42,11 @@ if [ $# -eq 0 ]; then
   tty=-tt
 else
   cmd="$pre$*"; tty=
+  case "${WIN_TTY:-auto}" in
+    1) tty=-tt ;;
+    auto) [ -t 0 ] && [ -t 1 ] && tty=-tt ;;
+  esac
 fi
 exec ssh $tty -i "$KEY" -p "$PORT" -o IdentitiesOnly=yes -o BatchMode=yes \
   -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$HOME/.ssh/known_hosts_win" \
-  -o ServerAliveInterval=30 "$USER_@$HOST" $cmd
+  -o ServerAliveInterval=30 -o LogLevel=ERROR "$USER_@$HOST" $cmd

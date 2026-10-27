@@ -136,12 +136,18 @@ ls /mnt/d
 1. 以管理员身份运行 `files\windows\enable-sshd.ps1 -User <Windows 用户名>`，启用 sshd。
 2. 运行 `tools\setup-docker-proxy.ps1`。它会生成 `keys\winssh`（被 Git 忽略），把公钥追加到 `%USERPROFILE%\.ssh\authorized_keys`，再把 `WIN_USER`、`WIN_SSH_KEY_FILE` 写进实例的 `.env`。
 3. 直接用 `docker compose` 时，自己在 `.env` 里填这两项。
+4. （推荐）以管理员身份运行 `files\windows\install-usersshd.ps1`。它会以当前用户身份另起一个 sshd，监听 `127.0.0.1:2223`，由“登录时触发、交互式、最高权限”的计划任务启动，并用 `conhost --headless` 运行，不会弹出窗口。经它执行的命令跑在桌面会话（Session 1）里，能弹出 GUI 窗口，也能读凭据管理器（GCM、DPAPI）。卸载：加 `-Uninstall`。
+
+`WIN_SSH_PORT` 默认是 `2223,22`：按顺序探测，用第一个能连上的端口。用户会话 sshd 没装或没运行时，自动退回系统 sshd（Session 0）。
+
+`win`/`winrun` 在本地 stdin 和 stdout 都是终端时会自动分配远端 PTY（ConPTY），可以直接运行 TUI 程序（如 `win pi`）。`WIN_TTY=1` 强制分配，`WIN_TTY=0` 禁止分配。
 
 在容器里运行 `win ver` 自检。
 
 几个坑：
 - **authorized_keys 放哪个文件**：`enable-sshd.ps1` 写的 `sshd_config` 没有 `Match Group administrators` 段，所以管理员账户读的也是用户目录下的 `authorized_keys`。如果是 Windows 默认配置，管理员账户读的是 `%ProgramData%\ssh\administrators_authorized_keys`。
 - **不要直接调 venv 里的 `python.exe`**：uv 建的 venv 里，`Scripts\python.exe` 是一个跳板程序，它指向 uv 的目录联接（`cpython-3.12-...`）。SSH 登录不是交互式会话，Windows 会把这个联接当成“不受信任的装入点”，拒绝访问，报 `uv trampoline failed to spawn Python child process`。`winpy` 改为直接启动真实的基础解释器，并设置 `__PYVENV_LAUNCHER__`。另外还要把该 venv 的 `pyvenv.cfg` 里的 `home` 改成带完整版本号的真实目录（`cpython-3.12.13-...`）。`winpy` 发现没改时会打印提示。
+- **Session 0**：系统 sshd 服务以 LocalSystem 运行，公钥登录得到的是 S4U 令牌，进程落在 Session 0：不能显示窗口，也读不到凭据管理器（报 `Unable to persist credentials with the 'wincredman'`）。用户会话 sshd（第 4 步）就是为解决这个问题。
 - **ps1 文件编码**：要给 Windows PowerShell 5.1 运行的 `.ps1` 只能用 ASCII，或者带 BOM 的 UTF-8。否则中文注释会按 ANSI 解码，把下一行一起吞掉。
 
 PowerShell Profile 可以由一键脚本自动加入 `bash1`、`bash2` 等快捷命令。每个实例使用独立的 Compose 项目、凭据文件和一对自动分配的 Windows 端口，脚本会检查端口占用，避免多个容器冲突。它会根据当前目录自动选择容器内的对应路径：`C:\Users\...` → `/mnt/c/Users/...`，`D:\...` → `/mnt/d/...`；容器未运行时会先自动启动。
