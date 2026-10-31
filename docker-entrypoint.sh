@@ -99,14 +99,15 @@ ccweb_up() {
 ccweb_up
 trap 'kill "$winproxy_pid" 2>/dev/null; exit 0' INT TERM
 
-# 守护:链/dnsfwd/redsocks 任何一个掉了就重跑 proxy-up.sh(它幂等,只补缺的)
+# 守护:链/dnsfwd/redsocks 任何一个掉了(或 redsocks accept 队列满=卡死)就重跑 proxy-up.sh(它幂等,只补缺的)
 while kill -0 "$winproxy_pid" 2>/dev/null; do
   sleep 15 &
   wait $! || true
   ccweb_up
   if ! pgrep -f '^/usr/local/bin/gost -L=socks5://127\.0\.0\.1:12346 ' >/dev/null ||
      ! pgrep -f '^python3 /usr/local/bin/dnsfwd\.py' >/dev/null ||
-     ! pgrep -x redsocks >/dev/null; then
+     ! pgrep -x redsocks >/dev/null ||
+     ss -ltnH 'sport = :12345' 2>/dev/null | awk '$2>=$3{f=1} END{exit !f}'; then
     clean /usr/local/bin/proxy-up.sh --boot
   fi
 done

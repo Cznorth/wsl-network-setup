@@ -189,6 +189,12 @@ if [ "$BOOT" = 1 ]; then DNS_OK=1; else dnsfwd_check && DNS_OK=1; fi
 log "dnsfwd_check ok=$DNS_OK$([ "$BOOT" = 1 ] && echo ' (boot:跳过)')"
 
 # ---------- 4) redsocks:上游在 /etc/redsocks.conf 固定为本地链式代理 ----------
+# 进程活着不等于健康:redsocks 撞 redsocks_conn_max 后可能不再 accept(进程还在),
+# accept 队列占满(Recv-Q >= backlog)即判定卡死,杀掉重起
+if ss -ltnH "sport = :$TCP_PORT" 2>/dev/null | awk '$2>=$3{f=1} END{exit !f}'; then
+    log "redsocks accept 队列已满,判定卡死,重启"
+    pkill -x redsocks 2>/dev/null && sleep 0.5
+fi
 pgrep -x redsocks >/dev/null 2>&1 || redsocks -c /etc/redsocks.conf
 
 # ---------- 5) nat 规则:无条件安装(fail-closed,不降级) ----------
