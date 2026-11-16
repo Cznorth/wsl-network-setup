@@ -75,3 +75,14 @@ python tools/hk-proxy/check_subscription.py --url-file "$env:USERPROFILE/.sideki
 5. 确认桌面 Codex 专线、DIRECT、TUN 与既有规则不变。
 6. 确认手机 `clash`、`frpc`、ADB 可用，手机 HTTP 检查通过。
 7. 确认 `ai.ch66.top` HTTP `200`、nginx 配置测试通过。
+
+## 临时订阅：悦途 2T（11-24 到期，T-1005）
+
+- Sub-Store 新增远程子订阅 `yuetoto`（显示名「悦途临时 2T / 11-24到期」），并加入 collection `all`；订阅地址只存服务器 `/root/yuetoto-url.txt`（600），不入库。
+- `clash` 模板（`tools/hk-proxy/add_isolated_subscription.py` 生成）：
+  - 新增 provider `yuetoto`（`filter: ^悦`，拉取同样走香港入口），新增策略组「悦途临时订阅（11-24到期）」`use: [yuetoto]`。
+  - provider `all` 与全部 include-all 策略组追加 `exclude-filter` `^悦`，新节点不进入自动选择、地区组及 OpenAI/Claude 等策略组。
+  - `rules`、静态 `proxies`、`dns`、`rule-providers`、默认出口（`MATCH,手动选择`）不变，已用备份前后逐项比对确认。
+- 备份：`/root/substore-bak/yuetoto-20261116-070306/`（改前 `sub-store.json` 与 API storage 快照）。回滚即恢复该 `sub-store.json` 后重启 `sub-store` 容器。
+- 11-16 验收：订阅 69 个节点（VLESS-REALITY 32、Hysteria2 37）；collection 163 个节点，其中原有 94 个，`all` provider 中「悦」节点泄漏 0 个。独立 mihomo 以 4 个并发、10s 超时测试，50/69 可通；抽查出口：香港家宽 HK Netvigator、台湾家宽 TW Chunghwa、美国家宽 US Verizon。12 个并发时大量超时，属于测试本身造成，不代表节点不可用。
+- 到期后删除：去掉子订阅、collection 成员、provider/策略组，并删除 `^悦` 排除条件（或直接用上面的备份覆盖，但需先合并备份后的其他改动）。
