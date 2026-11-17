@@ -36,3 +36,20 @@ class IsolationTests(unittest.TestCase):
         new = add_subscription(self.old, 'https://example.invalid/new')
         with self.assertRaises(AssertionError):
             add_subscription(new, 'https://example.invalid/new')
+
+
+class ParameterTests(unittest.TestCase):
+    def test_second_subscription(self):
+        old = IsolationTests('test_no_mutation')
+        old.setUp()
+        first = add_subscription(old.old, 'https://example.invalid/a')
+        second = add_subscription(first, 'https://example.invalid/b', name='bbcloud',
+                                  group='BBcloud 1T（11-18到期）', node_filter='^BB-')
+        excl = second['proxy-providers']['all']['exclude-filter']
+        for n in ['悦 · 香港', 'BB-🇭🇰香港01']:
+            self.assertTrue(re.search(excl, n))
+            self.assertTrue(re.search(second['proxy-groups'][0]['exclude-filter'], n))
+        self.assertFalse(re.search(excl, '香港入口'))
+        self.assertEqual(second['proxy-providers']['bbcloud']['filter'], '^BB-')
+        self.assertEqual(second['proxy-groups'][-1]['use'], ['bbcloud'])
+        self.assertEqual(second['rules'], old.old['rules'])

@@ -86,3 +86,13 @@ python tools/hk-proxy/check_subscription.py --url-file "$env:USERPROFILE/.sideki
 - 备份：`/root/substore-bak/yuetoto-20261116-070306/`（改前 `sub-store.json` 与 API storage 快照）。回滚即恢复该 `sub-store.json` 后重启 `sub-store` 容器。
 - 11-16 验收：订阅 69 个节点（VLESS-REALITY 32、Hysteria2 37）；collection 163 个节点，其中原有 94 个，`all` provider 中「悦」节点泄漏 0 个。独立 mihomo 以 4 个并发、10s 超时测试，50/69 可通；抽查出口：香港家宽 HK Netvigator、台湾家宽 TW Chunghwa、美国家宽 US Verizon。12 个并发时大量超时，属于测试本身造成，不代表节点不可用。
 - 到期后删除：去掉子订阅、collection 成员、provider/策略组，并删除 `^悦` 排除条件（或直接用上面的备份覆盖，但需先合并备份后的其他改动）。
+
+## 临时订阅：BBcloud 1T（11-18 20:10 到期，T-1014）
+
+- Sub-Store 新增远程子订阅 `bbcloud`（显示名「BBcloud 1T / 11-18到期」，UA `clash.meta`），过滤 `剩余/到期/官网/重置` 等信息节点，节点加前缀 `BB-`，并加入 collection `all`。订阅地址只存服务器 `/root/bbcloud-url.txt`（600），不入库。
+- `clash` 模板（`add_isolated_subscription.py`，已参数化 `name/group/node_filter`）：
+  - 新增 provider `bbcloud`（`filter: ^BB-`，拉取走香港入口），新增策略组「BBcloud 1T（11-18到期）」`use: [bbcloud]`。
+  - provider `all` 和 79 个 include-all 策略组追加 `exclude-filter` `^BB-`；`rules`、静态 `proxies`、`dns`、其他组的其他字段都不变，已对照备份逐项比对。
+- 备份：`/root/substore-bak/bbcloud-20261117-111428/`（改前 `sub-store.json`、API storage、collection 输出、clash 模板）。
+- 11-17 验收：上游 40 个节点（全部 anytls），去掉 4 个信息节点后剩 36 个；collection 从 163 个变成 199 个，原有节点一个没少，「BB-」节点漏进 `all` provider 0 个。用独立 mihomo、4 并发、10s 超时测试，33/36 可通（香港GCP直连、台湾01、美国03 不通）。
+- 到期后删除（服务器上执行，删子订阅和 collection 成员，从模板中去掉 provider/策略组和 `^BB-` 排除条件）：`python3 -I /root/hkproxy-tools/remove_isolated_subscription.py bbcloud 'BBcloud 1T（11-18到期）' '^BB-'`（已 dry-run：模板可精确还原为改前版本）；或在 11-17 之后没有其他改动时，直接用备份 `sub-store.json` 覆盖再 `docker restart sub-store`。

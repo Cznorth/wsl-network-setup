@@ -10,20 +10,21 @@ def append_filter(old, new=FILTER):
     return f'(?:{old})|(?:{new})' if old else new
 
 
-def add_subscription(document, url):
+def add_subscription(document, url, name=NAME, group=GROUP, node_filter=FILTER):
     result = copy.deepcopy(document)
-    assert NAME not in result.get('proxy-providers', {})
+    assert name not in result.get('proxy-providers', {})
+    assert all(g.get('name') != group for g in result.get('proxy-groups', []))
     provider = copy.deepcopy(result['proxy-providers']['all'])
-    provider.update(url=url, path='./proxy_provider/yuetoto.yaml')
+    provider.update(url=url, path=f'./proxy_provider/{name}.yaml')
     provider.pop('exclude-filter', None)
-    provider['filter'] = FILTER
-    result['proxy-providers'][NAME] = provider
+    provider['filter'] = node_filter
+    result['proxy-providers'][name] = provider
     result['proxy-providers']['all']['exclude-filter'] = append_filter(
-        result['proxy-providers']['all'].get('exclude-filter'))
-    for group in result.get('proxy-groups', []):
-        if any(group.get(key) for key in ('include-all', 'include-all-providers', 'include-all-proxies')):
-            group['exclude-filter'] = append_filter(group.get('exclude-filter'))
-    result['proxy-groups'].append({'name': GROUP, 'type': 'select', 'use': [NAME]})
+        result['proxy-providers']['all'].get('exclude-filter'), node_filter)
+    for g in result.get('proxy-groups', []):
+        if any(g.get(key) for key in ('include-all', 'include-all-providers', 'include-all-proxies')):
+            g['exclude-filter'] = append_filter(g.get('exclude-filter'), node_filter)
+    result['proxy-groups'].append({'name': group, 'type': 'select', 'use': [name]})
     assert result.get('rules') == document.get('rules')
     assert result.get('proxies') == document.get('proxies')
     return result
