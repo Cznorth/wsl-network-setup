@@ -96,3 +96,14 @@ python tools/hk-proxy/check_subscription.py --url-file "$env:USERPROFILE/.sideki
 - 备份：`/root/substore-bak/bbcloud-20261117-111428/`（改前 `sub-store.json`、API storage、collection 输出、clash 模板）。
 - 11-17 验收：上游 40 个节点（全部 anytls），去掉 4 个信息节点后剩 36 个；collection 从 163 个变成 199 个，原有节点一个没少，「BB-」节点漏进 `all` provider 0 个。用独立 mihomo、4 并发、10s 超时测试，33/36 可通（香港GCP直连、台湾01、美国03 不通）。
 - 到期后删除（服务器上执行，删子订阅和 collection 成员，从模板中去掉 provider/策略组和 `^BB-` 排除条件）：`python3 -I /root/hkproxy-tools/remove_isolated_subscription.py bbcloud 'BBcloud 1T（11-18到期）' '^BB-'`（已 dry-run：模板可精确还原为改前版本）；或在 11-17 之后没有其他改动时，直接用备份 `sub-store.json` 覆盖再 `docker restart sub-store`。
+
+## 美国家宽分组与 Grok / X 分流（T-1074、2026-11-20）
+
+- 「美国家宽」分组来自 Sub-Store local 子订阅 `ushome`（节点「美国家宽-洛杉矶-GTT」，socks5 出口 `64.32.186.55`，`dialer-proxy` 为香港-hkv4-VLESS-REALITY）；凭据只在服务器与 vm2api，不入库。模板中 provider `ushome`（`filter: ^美国家宽`）+ select 组「美国家宽」，其他 include-all 组的 `exclude-filter` 为 `^(悦|美国家宽)`，自动挑线不会用到它。
+- 电脑端 Grok/X 规则写在当前 profile（`1a197d14e29`）已挂载的 override `%APPDATA%/mihomo-party/override/1a2codexline.yaml` 的 `+rules`，紧跟 `PROCESS-NAME,codex.exe,Codex专线` 之后，所以 Codex 专线和 OpenCode/Kin 直连规则优先级不变：
+  - `AND,((NETWORK,UDP),(DST-PORT,443),(OR,(grok.com|x.ai|x.com|twitter.com|twimg.com|t.co|RULE-SET Twitter))),REJECT`：拒绝 QUIC，让浏览器回落 TCP，不让 UDP 走 socks5 出口。
+  - `PROCESS-NAME,Grok.exe`（目前电脑没装 Grok 桌面端，先预留）；`DOMAIN-SUFFIX` grok.com / x.ai / x.com / twitter.com / twimg.com / t.co / twttr.com；`RULE-SET,Twitter` 与 `RULE-SET,TwitterIP,no-resolve`。以上全部 → 「美国家宽」。原来的 `Twitter(X)` 组规则仍保留在后面，只是不会再命中。
+- 生效方式（不停内核、不断网）：先备份（`override/1a2codexline.yaml.bak-grokx-20261120-0305`、`work/config.yaml.bak-grokx-20261120-0305`），同步改 `work/config.yaml`，用 `mihomo-smart.exe -t` 在临时目录测试配置，然后通过命名管道 `\\.\pipe\…mihomo-admin…` 执行 `PUT /configs?force=true`（返回 204）。之后 Clash Party 重新生成配置时，override 会带上同样的规则。
+- 11-20 验收：`/rules` 共 50 条，新规则位于第 6–16 条。`/connections` 显示 grok.com、x.com、twitter.com、abs.twimg.com 的链路都是 `美国家宽-洛杉矶-GTT <- 美国家宽`；grok.com、x.ai、x.com 的 `/cdn-cgi/trace` 返回 `ip=64.32.186.55 loc=US colo=LAX`。对照组：www.cloudflare.com 出口 JP，chatgpt.com 仍走 OpenAI/美国自动，codex.exe 仍走 Codex专线，baidu 直连 200。
+- Windows `curl.exe` 访问 x.com / twimg 会报 `CRYPT_E_REVOCATION_OFFLINE`，这是 schannel 吊销检查失败，与分流无关；加 `--ssl-no-revoke` 后返回 200。浏览器吊销检查是软失败，不受影响。
+- 回滚：用上面两份 `.bak-grokx-*` 覆盖，再用同样的命名管道热重载。
