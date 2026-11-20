@@ -107,3 +107,9 @@ python tools/hk-proxy/check_subscription.py --url-file "$env:USERPROFILE/.sideki
 - 11-20 验收：`/rules` 共 50 条，新规则位于第 6–16 条。`/connections` 显示 grok.com、x.com、twitter.com、abs.twimg.com 的链路都是 `美国家宽-洛杉矶-GTT <- 美国家宽`；grok.com、x.ai、x.com 的 `/cdn-cgi/trace` 返回 `ip=64.32.186.55 loc=US colo=LAX`。对照组：www.cloudflare.com 出口 JP，chatgpt.com 仍走 OpenAI/美国自动，codex.exe 仍走 Codex专线，baidu 直连 200。
 - Windows `curl.exe` 访问 x.com / twimg 会报 `CRYPT_E_REVOCATION_OFFLINE`，这是 schannel 吊销检查失败，与分流无关；加 `--ssl-no-revoke` 后返回 200。浏览器吊销检查是软失败，不受影响。
 - 回滚：用上面两份 `.bak-grokx-*` 覆盖，再用同样的命名管道热重载。
+
+## 2026-11-20 Sub-Store 后端 API 只对美国服务器开放(T-1089 公益订阅收割)
+
+- `/opt/1panel/www/conf.d/sidekick.conf` 在 `clash.yaml` 那行后面加了 `location ^~ /<后端路径>/api/ { allow 107.173.156.37; deny all; proxy_pass http://127.0.0.1:3001; … }`,其他来源一律 403。改前备份 `sidekick.conf.bak-freepool-20261120-035604`。
+- 用途:美国服务器 `sidekick-linuxdo-browser` 的收割器把 linux.do 公益订阅加进 Sub-Store(标签 `linuxdo-free`)并入 collection `all`;后端地址存美国服务器 `/opt/sidekick/browser/substore.url`(600),不入库。
+- 回滚:用备份覆盖后 `docker exec 1Panel-openresty-aoGe nginx -t && … nginx -s reload`。
