@@ -113,3 +113,11 @@ python tools/hk-proxy/check_subscription.py --url-file "$env:USERPROFILE/.sideki
 - `/opt/1panel/www/conf.d/sidekick.conf` 在 `clash.yaml` 那行后面加了 `location ^~ /<后端路径>/api/ { allow 107.173.156.37; deny all; proxy_pass http://127.0.0.1:3001; … }`,其他来源一律 403。改前备份 `sidekick.conf.bak-freepool-20261120-035604`。
 - 用途:美国服务器 `sidekick-linuxdo-browser` 的收割器把 linux.do 公益订阅加进 Sub-Store(标签 `linuxdo-free`)并入 collection `all`;后端地址存美国服务器 `/opt/sidekick/browser/substore.url`(600),不入库。
 - 回滚:用备份覆盖后 `docker exec 1Panel-openresty-aoGe nginx -t && … nginx -s reload`。
+
+## 2026-11-24 币安分流到「日本」（电脑 + hkv4 聚合，对齐手机 T-1286）
+
+- 域名（18 个 `DOMAIN-SUFFIX`）：binance.com/.me/.info/.org/.cc/.cloud/.im/.vision、binancecnt.com、binancefuture.com、binancezh.com/.cc/.top/.pro/.co/.info、bnbstatic.com、bnbzh.ac，全部 → 「日本」。台湾组当前 0 个节点，不用。
+- hkv4 Sub-Store `clash` 模板：11-23 已在 rules 第 2–19 条加好（紧跟 `.google`），备份 `/root/substore-bak/binance-jp-20261123-152401/`；本次只核对，未再改动。
+- 电脑：override `1a2codexline.yaml` 的 `+rules` 在 `RULE-SET,TwitterIP,美国家宽` 之后插入同样 18 条，同步改 `work/config.yaml`；备份 `*.bak-binance-20261124-1216`。`mihomo-smart.exe -t` 临时目录测试通过，命名管道 `PUT /configs?force=true` 返回 204。
+- 11-24 验收：`/rules` 共 68 条，币安规则均指向「日本」。经 7890 访问 `api.binance.com/api/v3/ping`、`fapi.binance.com/fapi/v1/time` 均 200（www 首页 202），CloudFront POP `NRT12`；`/connections` 显示 `api.binance.com` 命中 `DomainSuffix binance.com`，链路「华夏2-日本专线… ← 日本自动 ← 日本」，exitGeoIP `jp`。未改 Docker 网络和浏览器。
+- 回滚：用 `.bak-binance-20261124-1216` 两份覆盖后同样热重载。
